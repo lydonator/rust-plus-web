@@ -9,9 +9,29 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@eneris/push-receiver": "^4.3.0",
+    "@liamcottle/push-receiver": "^0.0.3",
+    "@liamcottle/rustplus.js": "github:liamcottle/rustplus.js",
+    "@supabase/supabase-js": "^2.83.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/leaflet": "^1.9.21",
+    "electron-push-receiver": "^2.1.3",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "leaflet": "^1.9.4",
+    "long": "^5.3.2",
+    "lucide-react": "^0.554.0",
     "next": "16.0.3",
+    "openid": "^2.0.14",
+    "passport": "^0.7.0",
+    "passport-steam": "^1.0.18",
+    "protobufjs": "^7.5.4",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "react-leaflet": "^5.0.0",
+    "request": "^2.88.2",
+    "request-promise": "^4.2.6",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

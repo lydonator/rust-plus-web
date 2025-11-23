@@ -21,8 +21,7 @@ const targetString = 'protobuf.load(path.resolve(__dirname, "rustplus.proto")).t
 const injectionCode = `
             // PATCH V5: NUCLEAR OPTION - Make EVERYTHING Optional
             try {
-                console.error("[RustPlus] Applying in-memory schema patch V5 (Nuclear Option)...");
-                
+                // Reduced logging - only log errors
                 const forceOptional = (field) => {
                     field.rule = "optional";
                     Object.defineProperty(field, 'required', { get: () => false, configurable: true });
@@ -35,7 +34,8 @@ const injectionCode = `
                         Object.keys(type.fields).forEach(fieldName => {
                             forceOptional(type.fields[fieldName]);
                         });
-                        console.error("[RustPlus] Patched all fields in " + type.name);
+                        // Verbose logging disabled to reduce console noise
+                        // console.error("[RustPlus] Patched all fields in " + type.name);
                     }
                     if (type.nested) {
                         Object.keys(type.nested).forEach(nestedName => {
@@ -50,9 +50,8 @@ const injectionCode = `
                     processType(root.nested.rustplus);
                 } else {
                     // Fallback: try to lookup known types if namespace traversal fails
-                    console.error("[RustPlus] Could not traverse namespace, falling back to known types...");
                     const types = [
-                        "rustplus.AppMarker", 
+                        "rustplus.AppMarker",
                         "rustplus.AppMarker.SellOrder",
                         "rustplus.AppTeamInfo",
                         "rustplus.AppTeamInfo.Member",
@@ -68,7 +67,7 @@ const injectionCode = `
                         } catch(e) {}
                     });
                 }
-                
+
             } catch(e) { console.error("[RustPlus] Failed to patch protobuf schema:", e); }
 `;
 

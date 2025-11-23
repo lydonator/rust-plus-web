@@ -5,15 +5,26 @@ export function useShim(userId: string | null) {
     const [isConnected, setIsConnected] = useState(false);
     const [lastNotification, setLastNotification] = useState<any>(null);
     const [fcmToken, setFcmToken] = useState<string | null>(null);
+    const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
+    const [disconnectReason, setDisconnectReason] = useState<string | null>(null);
 
     useEffect(() => {
-        if (!userId) return;
+        if (!userId) {
+            setIsConnected(false);
+            return;
+        }
 
         // Connect to SSE stream
         const shimSSE = getShimSSE(userId);
 
-        // Update connection status
+        // Update connection status initially
         setIsConnected(shimSSE.isConnected());
+
+        // Poll connection status every second
+        const statusInterval = setInterval(() => {
+            const connected = shimSSE.isConnected();
+            setIsConnected(connected);
+        }, 1000);
 
         // Set up event listeners via window events
         const handleFcmStatus = (e: Event) => {
@@ -50,18 +61,50 @@ export function useShim(userId: string | null) {
             window.dispatchEvent(new CustomEvent('server_list_changed', { detail: event.detail }));
         };
 
+        const handleConnectionFailed = () => {
+            console.error('[Shim] Connection failed permanently');
+            setIsConnected(false);
+        };
+
+        const handleInactivityCountdown = (e: Event) => {
+            const event = e as CustomEvent;
+            console.log('[Shim] Inactivity countdown:', event.detail.secondsRemaining);
+            setCountdownSeconds(event.detail.secondsRemaining);
+        };
+
+        const handleCountdownCancelled = () => {
+            console.log('[Shim] Countdown cancelled');
+            setCountdownSeconds(null);
+        };
+
+        const handleDisconnectedByInactivity = (e: Event) => {
+            const event = e as CustomEvent;
+            console.log('[Shim] Disconnected by inactivity:', event.detail);
+            setCountdownSeconds(null);
+            setDisconnectReason(event.detail.reason || 'Disconnected due to inactivity');
+        };
+
         // Register listeners
         window.addEventListener('fcm_status', handleFcmStatus);
         window.addEventListener('notification', handleNotification);
         window.addEventListener('device_paired', handleDevicePaired);
         window.addEventListener('server_removed', handleServerRemoved);
+        window.addEventListener('shim_connection_failed', handleConnectionFailed);
+        window.addEventListener('inactivity_countdown', handleInactivityCountdown);
+        window.addEventListener('countdown_cancelled', handleCountdownCancelled);
+        window.addEventListener('disconnected_by_inactivity', handleDisconnectedByInactivity);
 
-        // Cleanup: remove listeners but DON'T disconnect SSE (it persists)
+        // Cleanup: remove listeners and stop polling
         return () => {
+            clearInterval(statusInterval);
             window.removeEventListener('fcm_status', handleFcmStatus);
             window.removeEventListener('notification', handleNotification);
             window.removeEventListener('device_paired', handleDevicePaired);
             window.removeEventListener('server_removed', handleServerRemoved);
+            window.removeEventListener('shim_connection_failed', handleConnectionFailed);
+            window.removeEventListener('inactivity_countdown', handleInactivityCountdown);
+            window.removeEventListener('countdown_cancelled', handleCountdownCancelled);
+            window.removeEventListener('disconnected_by_inactivity', handleDisconnectedByInactivity);
         };
     }, [userId]);
 
@@ -80,5 +123,17 @@ export function useShim(userId: string | null) {
         }
     };
 
-    return { isConnected, lastNotification, fcmToken, sendCommand };
+    const clearDisconnectReason = () => {
+        setDisconnectReason(null);
+    };
+
+    return {
+        isConnected,
+        lastNotification,
+        fcmToken,
+        sendCommand,
+        countdownSeconds,
+        disconnectReason,
+        clearDisconnectReason
+    };
 }

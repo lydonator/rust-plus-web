@@ -91,13 +91,14 @@ class FcmManager {
         }
     }
 
-    async startListening(userId, onNotification, onDevicePaired) {
+    async startListening(userId, onNotification, onDevicePaired, onServerPaired) {
         if (this.activeListeners.has(userId)) {
             console.log(`[FCM] Already listening for user ${userId}`);
             // Update callbacks if needed
             const listener = this.activeListeners.get(userId);
             listener.onNotification = onNotification;
             listener.onDevicePaired = onDevicePaired;
+            listener.onServerPaired = onServerPaired;
             return;
         }
 
@@ -124,7 +125,7 @@ class FcmManager {
             await client.connect();
             console.log(`[FCM] ✅ FCM Client CONNECTED for user ${userId}`);
 
-            this.activeListeners.set(userId, { client, onNotification, onDevicePaired });
+            this.activeListeners.set(userId, { client, onNotification, onDevicePaired, onServerPaired });
 
             // Register with Facepunch
             await this.registerWithFacepunch(userId, credentials);
@@ -200,13 +201,42 @@ class FcmManager {
     async handleNotification(userId, data) {
         console.log(`[FCM] Handling notification for user ${userId}`);
 
-        // Deduplicate notifications using persistentId
+        // Deduplicate notifications using persistentId (check database for persistence across restarts)
         if (data.persistentId) {
+            // Check in-memory cache first (fast path)
             if (this.processedNotifications.has(data.persistentId)) {
-                console.log(`[FCM] ⏭️  Skipping duplicate notification: ${data.persistentId}`);
+                console.log(`[FCM] ⏭️  Skipping duplicate notification (memory): ${data.persistentId}`);
                 return;
             }
+
+            // Check database for notifications processed in previous sessions
+            const { data: existing } = await this.supabase
+                .from('processed_fcm_notifications')
+                .select('persistent_id')
+                .eq('persistent_id', data.persistentId)
+                .maybeSingle();
+
+            if (existing) {
+                console.log(`[FCM] ⏭️  Skipping duplicate notification (database): ${data.persistentId}`);
+                this.processedNotifications.set(data.persistentId, Date.now());
+                return;
+            }
+
+            // Mark as processed in both memory and database
             this.processedNotifications.set(data.persistentId, Date.now());
+
+            // Store in database (async, don't wait)
+            this.supabase
+                .from('processed_fcm_notifications')
+                .insert({
+                    persistent_id: data.persistentId,
+                    notification_type: data.type || 'unknown'
+                })
+                .then(({ error }) => {
+                    if (error) {
+                        console.error('[FCM] Failed to store processed notification:', error);
+                    }
+                });
         }
 
         try {
@@ -221,17 +251,23 @@ class FcmManager {
                 Object.assign(parsedData, data);
             }
 
+            // Debug: Raw FCM data (disabled to reduce console noise)
+            // console.log(`[FCM] 📦 RAW DATA:`, JSON.stringify(parsedData, null, 2));
+
             // Parse the body JSON
             let body = {};
             if (parsedData.body) {
                 try {
                     body = JSON.parse(parsedData.body);
+                    // Verbose body logging disabled to reduce console noise
+                    // console.log(`[FCM] 📦 PARSED BODY:`, JSON.stringify(body, null, 2));
                 } catch (e) {
                     console.error('[FCM] Error parsing body JSON:', e);
                 }
             }
 
-            console.log(`[FCM] Notification type: ${body.type || 'device'}, entity: ${body.entityId || 'N/A'}`);
+            // Verbose type logging disabled to reduce console noise
+            // console.log(`[FCM] Notification type: ${body.type || 'device'}, entity: ${body.entityId || 'N/A'}`);
 
             const notification = { ...parsedData, data: body };
 
@@ -245,6 +281,7 @@ class FcmManager {
                     player_token: body.playerToken,
                     name: body.name || `${body.ip}:${body.port}`,
                     user_id: userId,
+                    last_viewed_at: new Date().toISOString(), // Set to now when pairing/re-pairing
                 };
 
                 const { data: savedServer, error } = await this.supabase
@@ -273,12 +310,13 @@ class FcmManager {
 
                         // Notify frontend that a new server was paired and connected
                         if (this.activeListeners.has(userId)) {
-                            const { onNotification } = this.activeListeners.get(userId);
-                            if (onNotification) {
-                                onNotification({
+                            const { onServerPaired } = this.activeListeners.get(userId);
+                            if (onServerPaired) {
+                                onServerPaired({
                                     type: 'server_paired',
                                     serverId: savedServer.id,
-                                    serverInfo: savedServer
+                                    serverInfo: savedServer,
+                                    userId
                                 });
                             }
                         }

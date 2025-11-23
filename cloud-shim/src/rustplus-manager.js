@@ -9,6 +9,31 @@ class RustPlusManager {
         this.previousMarkers = new Map(); // serverId -> Set of marker IDs for event tracking
         this.sseCallback = null; // Function to forward events to SSE clients
         this.serverFailureCounts = new Map(); // serverId -> consecutive failure count
+        this.reconnectAttempts = new Map(); // serverId -> reconnection attempt count
+        this.reconnectTimeouts = new Map(); // serverId -> timeout ID for pending reconnection
+        this.intentionalDisconnects = new Set(); // serverIds that were intentionally disconnected
+
+        // Listen for server deletions (Manual Removal from Frontend)
+        const channel = supabase
+            .channel('servers-changes')
+            .on('postgres_changes', {
+                event: 'DELETE',
+                schema: 'public',
+                table: 'servers'
+            }, (payload) => {
+                console.log('[RustPlus] ═══════════════════════════════════');
+                console.log('[RustPlus] 🗑️ DELETE EVENT RECEIVED FROM SUPABASE');
+                console.log('[RustPlus] Server ID:', payload.old.id);
+                console.log('[RustPlus] ═══════════════════════════════════');
+                this.disconnectServer(payload.old.id);
+            })
+            .subscribe((status, err) => {
+                if (err) {
+                    console.error('[RustPlus] ❌ Supabase subscription error:', err);
+                } else {
+                    console.log('[RustPlus] 📡 Supabase realtime subscription status:', status);
+                }
+            });
     }
 
     setSSECallback(callback) {
@@ -40,37 +65,21 @@ class RustPlusManager {
             }, 15000); // 15 second timeout
 
             // Handle connection events
-            rustPlus.on('connected', () => {
+            rustPlus.on('connected', async () => {
                 clearTimeout(connectionTimeout);
                 console.log(`[RustPlus] ✅ Connected to ${serverInfo.name}`);
                 this.emitToSSE(serverId, 'connection_status', { connected: true });
+
+                // Subscribe to all devices AFTER connection is confirmed
+                await this.subscribeToAllDevices(serverId);
 
                 // Fetch initial data
                 this.fetchAndEmitServerInfo(serverId, rustPlus);
                 this.fetchAndEmitMapData(serverId, rustPlus);
                 this.fetchAndEmitTeamInfo(serverId, rustPlus);
 
-                // Set up periodic server info fetching (every 30 seconds)
-                const serverInfoInterval = setInterval(() => {
-                    this.fetchAndEmitServerInfo(serverId, rustPlus);
-                }, 30000);
-
-                // Set up periodic map markers fetching (every 30 seconds)
-                const mapMarkersInterval = setInterval(() => {
-                    this.fetchAndEmitMapData(serverId, rustPlus);
-                }, 30000);
-
-                // Set up periodic team info fetching (every 10 seconds)
-                const teamInfoInterval = setInterval(() => {
-                    this.fetchAndEmitTeamInfo(serverId, rustPlus);
-                }, 10000);
-
-                // Store interval IDs for cleanup
-                this.serverInfoIntervals.set(serverId, serverInfoInterval);
-                this.mapDataIntervals.set(serverId, {
-                    markers: mapMarkersInterval,
-                    team: teamInfoInterval
-                });
+                // Set up polling intervals
+                this.setPollingIntervals(serverId, rustPlus);
 
                 resolve();
             });
@@ -79,26 +88,58 @@ class RustPlusManager {
                 console.log(`[RustPlus] ❌ Disconnected from ${serverInfo.name}`);
                 this.emitToSSE(serverId, 'connection_status', { connected: false });
 
-                // Clean up server info interval
-                if (this.serverInfoIntervals.has(serverId)) {
-                    clearInterval(this.serverInfoIntervals.get(serverId));
-                    this.serverInfoIntervals.delete(serverId);
-                }
-
-                // Clean up map data intervals
-                if (this.mapDataIntervals.has(serverId)) {
-                    const intervals = this.mapDataIntervals.get(serverId);
-                    clearInterval(intervals.markers);
-                    clearInterval(intervals.team);
-                    this.mapDataIntervals.delete(serverId);
-                }
-
+                // Clean up intervals
+                this.clearIntervalsForServer(serverId);
                 this.activeConnections.delete(serverId);
+
+                // Check if this was an intentional disconnect
+                if (this.intentionalDisconnects.has(serverId)) {
+                    console.log(`[RustPlus] ✅ Intentional disconnect - skipping reconnection for ${serverInfo.name}`);
+                    this.intentionalDisconnects.delete(serverId);
+                    return;
+                }
+
+                // Attempt reconnection with exponential backoff
+                const attempts = this.reconnectAttempts.get(serverId) || 0;
+                const maxAttempts = 5;
+
+                if (attempts < maxAttempts) {
+                    const delay = Math.min(5000 * Math.pow(2, attempts), 60000); // Max 60s delay
+                    console.log(`[RustPlus] 🔄 Reconnecting to ${serverInfo.name} in ${delay}ms (attempt ${attempts + 1}/${maxAttempts})`);
+
+                    this.reconnectAttempts.set(serverId, attempts + 1);
+
+                    const timeoutId = setTimeout(async () => {
+                        this.reconnectTimeouts.delete(serverId);
+                        try {
+                            await this.connectToServer(serverId, serverInfo);
+                            // Success - reset attempt counter
+                            this.reconnectAttempts.delete(serverId);
+                        } catch (err) {
+                            console.error(`[RustPlus] ❌ Reconnection attempt ${attempts + 1} failed:`, err.message);
+                        }
+                    }, delay);
+
+                    this.reconnectTimeouts.set(serverId, timeoutId);
+                } else {
+                    console.warn(`[RustPlus] ❌ Max reconnection attempts reached for ${serverInfo.name}`);
+                    this.reconnectAttempts.delete(serverId);
+                }
             });
 
             rustPlus.on('error', (error) => {
                 clearTimeout(connectionTimeout);
-                console.error(`[RustPlus] Error:`, error.message);
+
+                // ENHANCED LOGGING FOR UNPAIR DETECTION
+                console.error('[RustPlus] ═══════ ERROR DETAILS ═══════');
+                console.error('[RustPlus] Server:', serverInfo.name);
+                console.error('[RustPlus] Message:', error.message);
+                console.error('[RustPlus] Code:', error.code);
+                console.error('[RustPlus] Type:', error.type);
+                console.error('[RustPlus] Name:', error.name);
+                console.error('[RustPlus] Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+                console.error('[RustPlus] ═════════════════════════════');
+
                 this.emitToSSE(serverId, 'error', { message: error.message });
                 reject(error);
             });
@@ -144,6 +185,11 @@ class RustPlusManager {
                         entityId: entity.entityId,
                         value: entityValue
                     });
+
+                    // Check for alarm-triggered workflows (when alarm goes ON/triggers)
+                    if (entityValue === true || entityValue === 1) {
+                        this.checkAlarmWorkflows(serverId, entity.entityId);
+                    }
                 }
 
                 // Handle team messages
@@ -166,27 +212,53 @@ class RustPlusManager {
         });
     }
 
+    clearIntervalsForServer(serverId) {
+        // Clean up server info interval
+        if (this.serverInfoIntervals.has(serverId)) {
+            clearInterval(this.serverInfoIntervals.get(serverId));
+            this.serverInfoIntervals.delete(serverId);
+        }
+
+        // Clean up map data intervals
+        if (this.mapDataIntervals.has(serverId)) {
+            const intervals = this.mapDataIntervals.get(serverId);
+            clearInterval(intervals.markers);
+            clearInterval(intervals.team);
+            this.mapDataIntervals.delete(serverId);
+        }
+
+    }
+
     disconnectServer(serverId) {
+        console.log(`[RustPlus] 🛑 Disconnecting server ${serverId}...`);
+
+        // Mark as intentional disconnect to prevent reconnection
+        this.intentionalDisconnects.add(serverId);
+
+        // Clear all intervals FIRST (even if no active connection)
+        this.clearIntervalsForServer(serverId);
+
+        // Cancel pending reconnection attempts
+        if (this.reconnectTimeouts.has(serverId)) {
+            clearTimeout(this.reconnectTimeouts.get(serverId));
+            this.reconnectTimeouts.delete(serverId);
+        }
+        this.reconnectAttempts.delete(serverId);
+
+        // Clear failure counts
+        this.serverFailureCounts.delete(serverId);
+
+        // Clear previous markers
+        this.previousMarkers.delete(serverId);
+
+        // Disconnect RustPlus connection
         const rustPlus = this.activeConnections.get(serverId);
         if (rustPlus) {
-            console.log(`[RustPlus] Disconnecting from server ${serverId}...`);
-
-            // Clean up server info interval
-            if (this.serverInfoIntervals.has(serverId)) {
-                clearInterval(this.serverInfoIntervals.get(serverId));
-                this.serverInfoIntervals.delete(serverId);
-            }
-
-            // Clean up map data intervals
-            if (this.mapDataIntervals.has(serverId)) {
-                const intervals = this.mapDataIntervals.get(serverId);
-                clearInterval(intervals.markers);
-                clearInterval(intervals.team);
-                this.mapDataIntervals.delete(serverId);
-            }
-
             rustPlus.disconnect();
             this.activeConnections.delete(serverId);
+            console.log(`[RustPlus] ✅ Server ${serverId} fully disconnected and cleaned up`);
+        } else {
+            console.log(`[RustPlus] ⚠️  Server ${serverId} had no active connection, but intervals were cleared`);
         }
     }
 
@@ -284,7 +356,8 @@ class RustPlusManager {
 
     emitToSSE(serverId, type, data) {
         if (this.sseCallback) {
-            console.log(`[RustPlus] 🔔 Emitting SSE event: ${type} for server ${serverId}`);
+            // Verbose SSE logging disabled to reduce console noise
+            // console.log(`[RustPlus] 🔔 SSE: ${type} for ${serverId}`);
             this.sseCallback({
                 serverId,
                 type,
@@ -500,17 +573,82 @@ class RustPlusManager {
         }
 
         try {
+            // Set timeout to detect if callback is never called (happens when unpaired)
+            let callbackCalled = false;
+            const timeoutId = setTimeout(async () => {
+                if (!callbackCalled) {
+                    console.warn(`[RustPlus] ⏱️  getInfo() timed out for ${serverId} (callback never called - likely unpaired)`);
+
+                    // Track consecutive failures
+                    const currentFailures = (this.serverFailureCounts.get(serverId) || 0) + 1;
+                    this.serverFailureCounts.set(serverId, currentFailures);
+
+                    console.warn(`[RustPlus] ❌ Timeout failure for ${serverId} (attempt ${currentFailures}/3)`);
+
+                    // If 3 failures, remove the server
+                    if (currentFailures >= 3) {
+                        console.warn(`[RustPlus] 🗑️  Server ${serverId} timed out 3 times - removing (likely unpaired)`);
+                        await this.disconnectAndRemoveServer(serverId, 'Server failed to respond - likely unpaired in-game');
+                    }
+                }
+            }, 10000); // 10 second timeout
+
             rustPlus.getInfo(async (message) => {
+                callbackCalled = true;
+                clearTimeout(timeoutId);
+
                 if (message && message.response && message.response.info) {
                     const info = message.response.info;
-                    console.log(`[RustPlus] 📡 Broadcasting server info update for ${serverId}`);
+                    // Verbose logging disabled to reduce console noise
+                    // console.log(`[RustPlus] 📡 Server info update for ${serverId}`);
 
                     // Reset failure count on success
                     this.serverFailureCounts.delete(serverId);
 
+                    // Save server info to database
+                    const { error } = await supabase
+                        .from('server_info')
+                        .upsert({
+                            server_id: serverId,
+                            name: info.name,
+                            header_image: info.headerImage,
+                            url: info.url,
+                            map: info.map,
+                            map_size: info.mapSize,
+                            wipe_time: new Date(info.wipeTime * 1000), // Convert Unix timestamp to JS Date
+                            players: info.players,
+                            max_players: info.maxPlayers,
+                            queued_players: info.queuedPlayers,
+                            seed: info.seed,
+                            salt: info.salt,
+                            updated_at: new Date()
+                        }, { onConflict: 'server_id' });
+
+                    if (error) {
+                        console.error(`[RustPlus] Failed to save server info for ${serverId}:`, error);
+                    }
+
                     // Emit SSE event with server info
                     this.emitToSSE(serverId, 'server_info_update', info);
                 } else {
+                    // ENHANCED LOGGING FOR UNPAIR DETECTION
+                    console.warn('[RustPlus] ═══ GETINFO FAILURE ═══');
+                    console.warn('[RustPlus] Server ID:', serverId);
+                    console.warn('[RustPlus] Has message:', !!message);
+                    console.warn('[RustPlus] Has response:', !!message?.response);
+                    console.warn('[RustPlus] Has response.info:', !!message?.response?.info);
+                    console.warn('[RustPlus] Has response.error:', !!message?.response?.error);
+
+                    if (message?.response?.error) {
+                        console.warn('[RustPlus] Error details:', JSON.stringify(message.response.error, null, 2));
+                    }
+
+                    if (message?.response && !message.response.info) {
+                        console.warn('[RustPlus] Full response:', JSON.stringify(message.response, null, 2));
+                    }
+
+                    console.warn('[RustPlus] ═════════════════════');
+
                     // Track consecutive failures
                     const currentFailures = (this.serverFailureCounts.get(serverId) || 0) + 1;
                     this.serverFailureCounts.set(serverId, currentFailures);
@@ -524,9 +662,30 @@ class RustPlusManager {
                         // Get server details for notification
                         const { data: server } = await supabase
                             .from('servers')
-                            .select('name')
+                            .select('name, user_id')
                             .eq('id', serverId)
                             .single();
+
+                        // Store notification BEFORE deleting server
+                        if (server && server.user_id) {
+                            const { error: notifError } = await supabase
+                                .from('notifications')
+                                .insert({
+                                    user_id: server.user_id,
+                                    type: 'server_removed',
+                                    data: {
+                                        serverId: serverId,
+                                        serverName: server.name || 'Unknown Server',
+                                        reason: 'Server failed to respond - likely unpaired in-game'
+                                    },
+                                    timestamp: new Date(),
+                                    read: false
+                                });
+
+                            if (notifError) {
+                                console.error(`[RustPlus] Failed to create notification:`, notifError);
+                            }
+                        }
 
                         // Delete from database
                         const { error: deleteError } = await supabase
@@ -539,7 +698,7 @@ class RustPlusManager {
                         } else {
                             console.log(`[RustPlus] ✅ Removed unpaired server: ${server?.name || serverId}`);
 
-                            // Notify frontend FIRST, before cleanup
+                            // Notify frontend (best-effort, may not reach if client disconnected)
                             this.emitToSSE(serverId, 'server_removed', {
                                 serverId: serverId,
                                 serverName: server?.name || 'Unknown Server',
@@ -675,7 +834,8 @@ class RustPlusManager {
             this.getTeamInfo(serverId, (message) => {
                 if (message && message.response && message.response.teamInfo) {
                     const members = message.response.teamInfo.members || [];
-                    console.log(`[RustPlus] 👥 Broadcasting ${members.length} team members for ${serverId}`);
+                    // Verbose logging disabled to reduce console noise
+                    // console.log(`[RustPlus] 👥 Team: ${members.length} members for ${serverId}`);
 
                     // Emit SSE event with team info
                     this.emitToSSE(serverId, 'team_info_update', { members });
@@ -685,6 +845,239 @@ class RustPlusManager {
             console.error(`[RustPlus] Error fetching team info for ${serverId}:`, error.message);
         }
     }
+
+
+    // Helper to remove a server
+    async disconnectAndRemoveServer(serverId, reason) {
+        console.warn(`[RustPlus] 🗑️  Removing server ${serverId}. Reason: ${reason}`);
+
+        // Get server details for notification
+        const { data: server } = await supabase
+            .from('servers')
+            .select('name, user_id')
+            .eq('id', serverId)
+            .single();
+
+        // Store notification BEFORE deleting server
+        if (server && server.user_id) {
+            const { error: notifError } = await supabase
+                .from('notifications')
+                .insert({
+                    user_id: server.user_id,
+                    type: 'server_removed',
+                    data: {
+                        serverId: serverId,
+                        serverName: server.name || 'Unknown Server',
+                        reason: reason
+                    },
+                    timestamp: new Date(),
+                    read: false
+                });
+
+            if (notifError) {
+                console.error(`[RustPlus] Failed to create notification:`, notifError);
+            }
+        }
+
+        // Delete from database
+        const { error: deleteError } = await supabase
+            .from('servers')
+            .delete()
+            .eq('id', serverId);
+
+        if (deleteError) {
+            console.error(`[RustPlus] Failed to delete server ${serverId}:`, deleteError);
+        } else {
+            console.log(`[RustPlus] ✅ Removed unpaired server: ${server?.name || serverId}`);
+
+            // Notify frontend FIRST, before cleanup (best-effort, may not reach if client disconnected)
+            this.emitToSSE(serverId, 'server_removed', {
+                serverId: serverId,
+                serverName: server?.name || 'Unknown Server',
+                reason: reason
+            });
+
+            // Then disconnect and cleanup
+            const rustPlus = this.activeConnections.get(serverId);
+            if (rustPlus) {
+                rustPlus.disconnect();
+                this.activeConnections.delete(serverId);
+            }
+
+            // Clear intervals
+            if (this.serverInfoIntervals.has(serverId)) {
+                clearInterval(this.serverInfoIntervals.get(serverId));
+                this.serverInfoIntervals.delete(serverId);
+            }
+            if (this.mapDataIntervals.has(serverId)) {
+                const intervals = this.mapDataIntervals.get(serverId);
+                clearInterval(intervals.markers);
+                clearInterval(intervals.team);
+                this.mapDataIntervals.delete(serverId);
+            }
+
+            // Clear failure count
+            this.serverFailureCounts.delete(serverId);
+        }
+    }
+    // Helper to set polling intervals
+    setPollingIntervals(serverId, rustPlus) {
+        // Clear existing intervals
+        if (this.serverInfoIntervals.has(serverId)) {
+            clearInterval(this.serverInfoIntervals.get(serverId));
+            this.serverInfoIntervals.delete(serverId);
+        }
+        if (this.mapDataIntervals.has(serverId)) {
+            const intervals = this.mapDataIntervals.get(serverId);
+            clearInterval(intervals.markers);
+            clearInterval(intervals.team);
+            this.mapDataIntervals.delete(serverId);
+        }
+
+        // Set polling intervals
+        const serverInfoInterval = setInterval(() => {
+            this.fetchAndEmitServerInfo(serverId, rustPlus);
+        }, 30000); // 30s
+
+        const mapMarkersInterval = setInterval(() => {
+            this.fetchAndEmitMapData(serverId, rustPlus);
+        }, 30000); // 30s
+
+        const teamInfoInterval = setInterval(() => {
+            this.fetchAndEmitTeamInfo(serverId, rustPlus);
+        }, 10000); // 10s
+
+        // Store interval IDs
+        this.serverInfoIntervals.set(serverId, serverInfoInterval);
+        this.mapDataIntervals.set(serverId, {
+            markers: mapMarkersInterval,
+            team: teamInfoInterval
+        });
+    }
+
+    // Check for alarm-triggered workflows
+    async checkAlarmWorkflows(serverId, alarmEntityId) {
+        try {
+            console.log(`[Workflows] 🔔 Alarm ${alarmEntityId} triggered, checking for workflows...`);
+
+            // Get the alarm's actual message from RustPlus API
+            let alarmMessage = `Alarm #${alarmEntityId}`;
+
+            const rustPlus = this.activeConnections.get(serverId);
+            if (rustPlus) {
+                // Fetch entity info to get the alarm's custom message
+                await new Promise((resolve) => {
+                    rustPlus.getEntityInfo(alarmEntityId, (message) => {
+                        if (message.response && message.response.entityInfo) {
+                            const info = message.response.entityInfo;
+                            // The alarm message is stored in the payload's message field
+                            if (info.payload && info.payload.message) {
+                                alarmMessage = info.payload.message;
+                                console.log(`[Workflows] Alarm message from game: "${alarmMessage}"`);
+                            }
+                        }
+                        resolve();
+                    });
+                });
+            }
+
+            // Fetch enabled workflows with alarm triggers for this alarm
+            const { data: workflows, error } = await supabase
+                .from('device_workflows')
+                .select('*, actions:workflow_actions(*)')
+                .eq('server_id', serverId)
+                .eq('enabled', true)
+                .eq('trigger_type', 'alarm');
+
+            if (error) {
+                console.error(`[Workflows] Error fetching alarm workflows:`, error);
+                return;
+            }
+
+            if (!workflows || workflows.length === 0) {
+                console.log(`[Workflows] No alarm workflows configured`);
+                return;
+            }
+
+            // Filter workflows that match this specific alarm
+            const matchingWorkflows = workflows.filter(w =>
+                w.trigger_config && w.trigger_config.alarm_id === alarmEntityId
+            );
+
+            if (matchingWorkflows.length === 0) {
+                console.log(`[Workflows] No workflows configured for alarm ${alarmEntityId}`);
+                return;
+            }
+
+            console.log(`[Workflows] Found ${matchingWorkflows.length} workflow(s) to execute`);
+
+            // Execute each matching workflow
+            for (const workflow of matchingWorkflows) {
+                console.log(`[Workflows] Executing workflow: ${workflow.name}`);
+
+                const actions = workflow.actions?.sort((a, b) => a.action_order - b.action_order) || [];
+
+                for (const action of actions) {
+                    try {
+                        await this.executeWorkflowAction(serverId, action, { alarmMessage });
+                    } catch (err) {
+                        console.error(`[Workflows] Error executing action:`, err);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error(`[Workflows] Error checking alarm workflows:`, err);
+        }
+    }
+
+    // Execute a single workflow action
+    async executeWorkflowAction(serverId, action, context = {}) {
+        const { action_type, action_config } = action;
+
+        switch (action_type) {
+            case 'set_device':
+                if (action_config.entity_id && action_config.value !== undefined) {
+                    console.log(`[Workflows] Setting device ${action_config.entity_id} to ${action_config.value ? 'ON' : 'OFF'}`);
+                    this.setEntityValue(serverId, action_config.entity_id, action_config.value);
+                }
+                break;
+
+            case 'set_group':
+                if (action_config.entity_ids && Array.isArray(action_config.entity_ids)) {
+                    console.log(`[Workflows] Setting ${action_config.entity_ids.length} devices to ${action_config.value ? 'ON' : 'OFF'}`);
+                    for (const entityId of action_config.entity_ids) {
+                        this.setEntityValue(serverId, entityId, action_config.value);
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                }
+                break;
+
+            case 'wait':
+                if (action_config.duration_ms) {
+                    console.log(`[Workflows] Waiting ${action_config.duration_ms}ms`);
+                    await new Promise(resolve => setTimeout(resolve, action_config.duration_ms));
+                }
+                break;
+
+            case 'notify':
+                // Send team chat message with alarm info
+                const message = context.alarmMessage
+                    ? `Smart Alarm: ${context.alarmMessage}`
+                    : (action_config.message || 'Workflow notification');
+
+                console.log(`[Workflows] Sending team notification: ${message}`);
+
+                this.sendTeamMessage(serverId, message, (response) => {
+                    if (response.response && response.response.success) {
+                        console.log(`[Workflows] ✅ Team notification sent`);
+                    } else {
+                        console.error(`[Workflows] ❌ Failed to send team notification`);
+                    }
+                });
+                break;
+        }
+    }
+
 }
 
 module.exports = new RustPlusManager();

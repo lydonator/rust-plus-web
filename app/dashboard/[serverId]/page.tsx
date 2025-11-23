@@ -35,12 +35,18 @@ export default function ServerOverview() {
         fetchServer();
     }, [serverId]);
 
-    // Fetch fresh server info on mount (one-time)
+    // Update last_viewed_at and fetch fresh server info on mount (one-time)
     useEffect(() => {
         if (!user?.userId || !serverId) return;
 
         const fetchFreshServerInfo = async () => {
             try {
+                // Update last_viewed_at timestamp for optimization system
+                await fetch(`/api/servers/${serverId}/view`, {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+
                 console.log('[Overview] Requesting fresh server info...');
                 const result = await sendCommand(serverId, 'getServerInfo', {});
 

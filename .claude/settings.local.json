@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx supabase db push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

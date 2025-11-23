@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
-import { Info, MapPin, Users, Plus, Minus, RotateCcw, RefreshCw, ShoppingCart, Grid3X3, Skull } from 'lucide-react';
+import { Info, MapPin, Users, Plus, Minus, RotateCcw, ShoppingCart, Grid3X3, Skull } from 'lucide-react';
 import { useShim } from '@/hooks/useShim';
 import rustItems from '@/lib/rust-items.json';
 
@@ -75,7 +75,7 @@ export default function MapPage() {
     const [showMarkers, setShowMarkers] = useState(true);
     const [showTeam, setShowTeam] = useState(true);
     const [showMonuments, setShowMonuments] = useState(true);
-    const [showTrainTunnels, setShowTrainTunnels] = useState(true);
+    const [showTrainTunnels, setShowTrainTunnels] = useState(false);
     const [showGrid, setShowGrid] = useState(false);
 
 
@@ -537,13 +537,6 @@ export default function MapPage() {
                     >
                         <span>🚇</span>
                         <span>Train Tunnels</span>
-                    </button>
-                    <button
-                        onClick={fetchMapData}
-                        className="flex items-center gap-2 px-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white rounded-lg transition-colors"
-                    >
-                        <RefreshCw className="w-4 h-4" />
-                        <span>Refresh</span>
                     </button>
                 </div>
             </div>

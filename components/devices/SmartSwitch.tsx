@@ -27,9 +27,46 @@ export default function SmartSwitch({ device, onToggle }: SmartSwitchProps) {
     }, [isEditing]);
 
     const handleToggle = async () => {
+        const entityId = device.entity_id;
+        const targetValue = !isOn;
+
         setIsToggling(true);
-        onToggle(device.entity_id, !isOn);
-        setTimeout(() => setIsToggling(false), 2000);
+
+        try {
+            // Send command
+            onToggle(entityId, targetValue);
+
+            // Wait for SSE confirmation (with timeout)
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    console.warn(`[SmartSwitch] Toggle timeout for entity ${entityId}`);
+                    reject(new Error('Toggle confirmation timeout'));
+                }, 5000);
+
+                const handler = (e: Event) => {
+                    const event = e as CustomEvent;
+                    if (
+                        event.detail.serverId === serverId &&
+                        event.detail.type === 'entity' &&
+                        event.detail.data.entityId === entityId
+                    ) {
+                        clearTimeout(timeout);
+                        window.removeEventListener('rustplus_event', handler as EventListener);
+                        resolve(null);
+                    }
+                };
+
+                window.addEventListener('rustplus_event', handler as EventListener);
+            });
+
+            console.log(`[SmartSwitch] Toggle confirmed for entity ${entityId}`);
+        } catch (error) {
+            console.error('[SmartSwitch] Toggle failed:', error);
+            // Show error to user
+            alert('Failed to toggle device. Please try again.');
+        } finally {
+            setIsToggling(false);
+        }
     };
 
     const handleNameRightClick = (e: React.MouseEvent) => {

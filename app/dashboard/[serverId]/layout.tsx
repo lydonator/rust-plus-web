@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { usePathname, useParams } from 'next/navigation';
 import {
@@ -9,22 +11,61 @@ import {
     MessageSquare,
     ShoppingCart,
     Settings,
-    ArrowLeft
+    ArrowLeft,
+    Workflow
 } from 'lucide-react';
+import { useServerConnection } from '@/components/ServerConnectionProvider';
 
 export default function ServerDashboardLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
+    const router = useRouter();
     const pathname = usePathname();
     const params = useParams();
     const serverId = params.serverId as string;
+    const { activeServerId } = useServerConnection();
+    const [isChecking, setIsChecking] = useState(true);
+
+    // Check if server is connected - if not, redirect to dashboard
+    useEffect(() => {
+        if (serverId && activeServerId !== serverId) {
+            console.log(`[ServerLayout] Server ${serverId} is not connected (active: ${activeServerId}). Redirecting to dashboard...`);
+            router.push('/dashboard');
+        } else {
+            setIsChecking(false);
+        }
+    }, [serverId, activeServerId, router]);
+
+    // Track last viewed time
+    useEffect(() => {
+        if (serverId) {
+            fetch('/api/servers', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: serverId, action: 'view' })
+            }).catch(err => console.error('Failed to update view time:', err));
+        }
+    }, [serverId]);
+
+    // Show loading while checking connection
+    if (isChecking) {
+        return (
+            <div className="flex h-screen items-center justify-center bg-neutral-900 text-white">
+                <div className="text-center">
+                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-rust-500 mb-4"></div>
+                    <p className="text-neutral-400">Checking server connection...</p>
+                </div>
+            </div>
+        );
+    }
 
     const navItems = [
         { name: 'Overview', href: `/dashboard/${serverId}`, icon: LayoutDashboard },
         { name: 'Map', href: `/dashboard/${serverId}/map`, icon: MapIcon },
         { name: 'Devices', href: `/dashboard/${serverId}/devices`, icon: Zap },
+        { name: 'Workflows', href: `/dashboard/${serverId}/workflows`, icon: Workflow },
         { name: 'Chat', href: `/dashboard/${serverId}/chat`, icon: MessageSquare },
         { name: 'Shops', href: `/dashboard/${serverId}/shops`, icon: ShoppingCart },
     ];

@@ -127,6 +127,36 @@ class ShimSSEManager {
             window.dispatchEvent(new CustomEvent('server_removed', { detail: data }));
         });
 
+        this.eventSource.addEventListener('server_connected', (event: any) => {
+            const data = JSON.parse(event.data);
+            console.log('[ShimSSE] Server Connected:', data);
+            window.dispatchEvent(new CustomEvent('server_connected', { detail: data }));
+        });
+
+        this.eventSource.addEventListener('server_list_changed', (event: any) => {
+            const data = JSON.parse(event.data);
+            console.log('[ShimSSE] Server List Changed:', data);
+            window.dispatchEvent(new CustomEvent('server_list_changed', { detail: data }));
+        });
+
+        this.eventSource.addEventListener('inactivity_countdown', (event: any) => {
+            const data = JSON.parse(event.data);
+            console.log('[ShimSSE] Inactivity Countdown:', data);
+            window.dispatchEvent(new CustomEvent('inactivity_countdown', { detail: data }));
+        });
+
+        this.eventSource.addEventListener('countdown_cancelled', (event: any) => {
+            const data = JSON.parse(event.data);
+            console.log('[ShimSSE] Countdown Cancelled:', data);
+            window.dispatchEvent(new CustomEvent('countdown_cancelled', { detail: data }));
+        });
+
+        this.eventSource.addEventListener('disconnected_by_inactivity', (event: any) => {
+            const data = JSON.parse(event.data);
+            console.log('[ShimSSE] Disconnected By Inactivity:', data);
+            window.dispatchEvent(new CustomEvent('disconnected_by_inactivity', { detail: data }));
+        });
+
         this.eventSource.addEventListener('error', (event: any) => {
             // Only try to parse if there's actual data
             if (event.data) {
@@ -144,14 +174,35 @@ class ShimSSEManager {
         this.eventSource.onerror = (error) => {
             console.error('[ShimSSE] Connection error:', error);
 
-            // Only increment on actual connection failures, not on normal close
+            // Only handle actual connection failures
             if (this.eventSource?.readyState === EventSource.CLOSED) {
                 this.reconnectAttempts++;
 
                 if (this.reconnectAttempts >= this.maxReconnectAttempts) {
                     console.error('[ShimSSE] Max reconnect attempts reached, giving up');
                     this.disconnect();
+                    // Dispatch event to notify UI
+                    window.dispatchEvent(new CustomEvent('shim_connection_failed'));
+                    return;
                 }
+
+                // Calculate exponential backoff delay
+                const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                console.log(`[ShimSSE] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+                // Close the failed connection
+                if (this.eventSource) {
+                    this.eventSource.close();
+                    this.eventSource = null;
+                }
+
+                // Attempt to reconnect after delay
+                setTimeout(() => {
+                    if (this.currentUserId) {
+                        console.log('[ShimSSE] Attempting reconnection...');
+                        this.connect(this.currentUserId);
+                    }
+                }, delay);
             }
         };
     }

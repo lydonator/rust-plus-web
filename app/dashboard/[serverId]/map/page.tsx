@@ -1,10 +1,14 @@
 'use client';
 
-import { useParams } from 'next/navigation';
-import { useState, useEffect, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Info, MapPin, Users, Plus, Minus, RotateCcw, ShoppingCart, Grid3X3, Skull } from 'lucide-react';
 import { useShim } from '@/hooks/useShim';
+import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 import rustItems from '@/lib/rust-items.json';
+import ChatOverlay from '@/components/ChatOverlay';
+import MapSidebar from '@/components/MapSidebar';
+import { clusterMarkers, getClusterRadius, type MarkerCluster } from '@/lib/markerClustering';
 
 interface Monument {
     token: string;
@@ -63,6 +67,9 @@ export default function MapPage() {
     const serverId = params.serverId as string;
     const [userId, setUserId] = useState<string | null>(null);
 
+    // Guard against shim connection failures
+    useShimConnectionGuard();
+
     const [mapData, setMapData] = useState<MapData | null>(null);
     const [markers, setMarkers] = useState<MapMarker[]>([]);
     const [teamInfo, setTeamInfo] = useState<TeamMember[]>([]);
@@ -78,6 +85,11 @@ export default function MapPage() {
     const [showTrainTunnels, setShowTrainTunnels] = useState(false);
     const [showGrid, setShowGrid] = useState(false);
 
+    // Shopping/search state
+    const [searchedItemId, setSearchedItemId] = useState<number | null>(null);
+    const [highlightedVendors, setHighlightedVendors] = useState<number[]>([]);
+    const [shoppingList, setShoppingList] = useState<any[]>([]);
+
 
 
     const [scale, setScale] = useState(1);
@@ -86,9 +98,24 @@ export default function MapPage() {
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const [hoveredMarkerIndex, setHoveredMarkerIndex] = useState<number | null>(null);
+    const [hoveredClusterId, setHoveredClusterId] = useState<string | null>(null);
+    const [clickedClusterId, setClickedClusterId] = useState<string | null>(null);
+    const [expandedVendors, setExpandedVendors] = useState<Record<string, boolean>>({});
     const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const lastDeathTimeRef = useRef<Record<string, number>>({});
 
+
+    // Cluster vending machines for performance
+    const vendingClusters = useMemo(() => {
+        if (!serverInfo) return [];
+
+        const vendingMarkers = markers
+            .map((marker, idx) => ({ ...marker, id: idx }))
+            .filter(m => m.type === 3 || m.type === 'VendingMachine');
+
+        const clusterRadius = getClusterRadius(serverInfo.mapSize);
+        return clusterMarkers(vendingMarkers, clusterRadius);
+    }, [markers, serverInfo]);
 
     const handleMarkerEnter = (index: number) => {
         if (hoverTimeoutRef.current) {
@@ -96,12 +123,52 @@ export default function MapPage() {
             hoverTimeoutRef.current = null;
         }
         setHoveredMarkerIndex(index);
+        setHoveredClusterId(null);
+    };
+
+    const handleClusterEnter = (clusterId: string) => {
+        if (hoverTimeoutRef.current) {
+            clearTimeout(hoverTimeoutRef.current);
+            hoverTimeoutRef.current = null;
+        }
+        setHoveredClusterId(clusterId);
+        setHoveredMarkerIndex(null);
     };
 
     const handleMarkerLeave = () => {
         hoverTimeoutRef.current = setTimeout(() => {
             setHoveredMarkerIndex(null);
+            setHoveredClusterId(null);
         }, 300);
+    };
+
+    // Handle item search from sidebar
+    const handleItemSearch = (itemId: number, itemName: string) => {
+        console.log('[Map] Searching for item:', itemId, itemName);
+        setSearchedItemId(itemId);
+
+        // Find all vending machines selling this item
+        const vendorIndices: number[] = [];
+        markers.forEach((marker, idx) => {
+            const isVending = marker.type === 3 || marker.type === 'VendingMachine';
+            if (!isVending || !marker.sellOrders) return;
+
+            const sellsItem = marker.sellOrders.some(
+                order => order.itemId === itemId && order.amountInStock > 0
+            );
+
+            if (sellsItem) {
+                vendorIndices.push(idx);
+            }
+        });
+
+        console.log('[Map] Found', vendorIndices.length, 'vendors selling', itemName);
+        setHighlightedVendors(vendorIndices);
+    };
+
+    const handleClearHighlights = () => {
+        setSearchedItemId(null);
+        setHighlightedVendors([]);
     };
 
     const itemsDb = rustItems as RustItemsDatabase;
@@ -230,6 +297,154 @@ export default function MapPage() {
             window.removeEventListener('server_info_update', handleServerInfoUpdate);
         };
     }, [userId, serverId]);
+
+    // Fetch shopping list for this server
+    useEffect(() => {
+        if (!userId || !serverId) return;
+
+        const fetchShoppingList = async () => {
+            try {
+                const response = await fetch(`/api/shopping-list?serverId=${serverId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setShoppingList(data);
+                }
+            } catch (error) {
+                console.error('[Map] Failed to fetch shopping list:', error);
+            }
+        };
+
+        fetchShoppingList();
+
+        // Refresh shopping list every 10 seconds to catch updates
+        const interval = setInterval(fetchShoppingList, 10000);
+
+        return () => clearInterval(interval);
+    }, [userId, serverId]);
+
+    // Calculate highlighted vendors based on shopping list and current markers
+    useEffect(() => {
+        if (shoppingList.length === 0 || markers.length === 0) {
+            setHighlightedVendors([]);
+            return;
+        }
+
+        const vendorIndices: number[] = [];
+        const shoppingItemIds = new Set(shoppingList.map(item => item.item_id));
+
+        markers.forEach((marker, idx) => {
+            const isVending = marker.type === 3 || marker.type === 'VendingMachine';
+            if (!isVending || !marker.sellOrders) return;
+
+            // Check if this vendor sells any item from the shopping list
+            const sellsShoppingItem = marker.sellOrders.some((order: any) =>
+                shoppingItemIds.has(order.itemId) && order.amountInStock > 0
+            );
+
+            if (sellsShoppingItem) {
+                vendorIndices.push(idx);
+            }
+        });
+
+        setHighlightedVendors(vendorIndices);
+    }, [shoppingList, markers]);
+
+    // Listen for shopping list matches and emit team chat notifications
+    // Helper function to convert x,y coordinates to grid square (e.g., "G15")
+    // Based on official Rust grid system: 150m grid cells
+    // RustPlus coordinates are already in map space (0 to mapSize) from top-left
+    const coordsToGrid = (x: number, y: number, mapSize: number) => {
+        const gridCellSize = 150; // Each grid cell is 150m x 150m
+
+        // Calculate grid indices
+        // X axis: left to right (A, B, C...)
+        const letterIndex = Math.floor(x / gridCellSize);
+
+        // Y axis: bottom to top (need to invert since coords are from top)
+        const numberIndex = Math.floor((mapSize - y) / gridCellSize);
+
+        // Convert to grid notation
+        // Rust uses: A-Z (0-25), then AA-AZ (26-51), BA-BZ (52-77), etc.
+        let letter;
+        if (letterIndex < 0) {
+            letter = 'A'; // Safety check
+        } else if (letterIndex <= 25) {
+            letter = String.fromCharCode(65 + letterIndex); // A-Z
+        } else {
+            // Beyond Z: AA, AB, AC... AZ, BA, BB...
+            const firstLetter = String.fromCharCode(65 + Math.floor((letterIndex - 26) / 26));
+            const secondLetter = String.fromCharCode(65 + ((letterIndex - 26) % 26));
+            letter = firstLetter + secondLetter;
+        }
+
+        return `${letter}${Math.max(0, numberIndex)}`;
+    };
+
+    useEffect(() => {
+        if (!userId) return;
+
+        // Use a ref to track last alert to prevent duplicates
+        const lastAlertRef = { itemId: null as number | null, timestamp: 0 };
+
+        const handleShoppingListMatch = (event: Event) => {
+            const customEvent = event as CustomEvent;
+            const { serverId: eventServerId, item, vendors } = customEvent.detail;
+
+            if (eventServerId !== serverId) return;
+
+            // Prevent duplicate alerts within 5 seconds for the same item
+            const now = Date.now();
+            if (lastAlertRef.itemId === item.item_id && now - lastAlertRef.timestamp < 5000) {
+                console.log('[Shopping] ⏭️ Skipping duplicate alert for', item.item_name);
+                return;
+            }
+
+            lastAlertRef.itemId = item.item_id;
+            lastAlertRef.timestamp = now;
+
+            console.log('[Shopping] 🛒 Item found:', item.item_name, 'at', vendors.length, 'vendor(s)');
+
+            // Build notification with vendor locations
+            const mapSize = serverInfo?.mapSize || mapData?.width || 4000;
+
+            let locationInfo = '';
+            if (vendors.length === 1) {
+                const grid = coordsToGrid(vendors[0].x, vendors[0].y, mapSize);
+                locationInfo = ` at ${grid} (${Math.round(vendors[0].x)}, ${Math.round(vendors[0].y)})`;
+            } else if (vendors.length <= 3) {
+                // Show up to 3 locations
+                const locations = vendors.slice(0, 3).map((v: any) => coordsToGrid(v.x, v.y, mapSize)).join(', ');
+                locationInfo = ` at: ${locations}`;
+            }
+
+            // Emit team chat notification immediately
+            const notification = `🛒 Shopping Alert: ${item.item_name} is now available at ${vendors.length} shop(s)${locationInfo}`;
+            window.dispatchEvent(new CustomEvent('team_message', {
+                detail: {
+                    serverId,
+                    message: {
+                        steamId: '0',
+                        name: 'Shopping Bot',
+                        message: notification,
+                        color: '#f59e0b',
+                        time: Date.now()
+                    }
+                }
+            }));
+
+            // Refresh shopping list to trigger highlighting
+            fetch(`/api/shopping-list?serverId=${serverId}`)
+                .then(res => res.json())
+                .then(data => setShoppingList(data))
+                .catch(err => console.error('[Map] Failed to refresh shopping list:', err));
+        };
+
+        window.addEventListener('shopping_list_match', handleShoppingListMatch);
+
+        return () => {
+            window.removeEventListener('shopping_list_match', handleShoppingListMatch);
+        };
+    }, [userId, serverId, serverInfo, mapData]);
 
     // Track death locations (simplified: always update if dead)
     useEffect(() => {
@@ -475,6 +690,19 @@ export default function MapPage() {
 
     return (
         <div className="flex flex-col h-screen bg-neutral-950 p-6">
+            <style jsx>{`
+                @keyframes gentle-bounce {
+                    0%, 100% {
+                        transform: translateY(0);
+                    }
+                    50% {
+                        transform: translateY(-4px);
+                    }
+                }
+                .bounce-vendor {
+                    animation: gentle-bounce 2s ease-in-out infinite;
+                }
+            `}</style>
             <div className="flex items-center justify-between mb-4">
                 <div>
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
@@ -611,21 +839,21 @@ export default function MapPage() {
                                     const fontSize = cellSize * 0.15;
 
                                     const center = serverInfo.mapSize / 2;
-                                    // Manual offset to match in-game grid (approx 1/4 cell)
-                                    // Visually adjusted: Left (-X) and Down (-Y)
-                                    const GRID_OFFSET_X = -36.6;
-                                    const GRID_OFFSET_Y = -36.6;
+                                    // Official Rust grid system: 150m cells with proper alignment
+                                    const GRID_CELL_SIZE = 150;
+                                    const GRID_OFFSET_X = 0;
+                                    const GRID_OFFSET_Y = 0;
 
-                                    const kMinX = Math.floor(-(center + GRID_OFFSET_X) / 146.3);
-                                    const kMaxX = Math.ceil((serverInfo.mapSize - center - GRID_OFFSET_X) / 146.3);
-                                    const kMinY = Math.floor(-(center + GRID_OFFSET_Y) / 146.3);
-                                    const kMaxY = Math.ceil((serverInfo.mapSize - center - GRID_OFFSET_Y) / 146.3);
+                                    const kMinX = Math.floor(-(center + GRID_OFFSET_X) / GRID_CELL_SIZE);
+                                    const kMaxX = Math.ceil((serverInfo.mapSize - center - GRID_OFFSET_X) / GRID_CELL_SIZE);
+                                    const kMinY = Math.floor(-(center + GRID_OFFSET_Y) / GRID_CELL_SIZE);
+                                    const kMaxY = Math.ceil((serverInfo.mapSize - center - GRID_OFFSET_Y) / GRID_CELL_SIZE);
 
                                     const elements = [];
 
                                     // Vertical Lines
                                     for (let k = kMinX; k <= kMaxX; k++) {
-                                        const x = center + k * 146.3 + GRID_OFFSET_X;
+                                        const x = center + k * GRID_CELL_SIZE + GRID_OFFSET_X;
                                         if (x < 0 || x > serverInfo.mapSize) continue;
                                         const start = monumentToScreen(x, 0);
                                         const end = monumentToScreen(x, serverInfo.mapSize);
@@ -640,7 +868,7 @@ export default function MapPage() {
 
                                     // Horizontal Lines
                                     for (let k = kMinY; k <= kMaxY; k++) {
-                                        const y = center + k * 146.3 + GRID_OFFSET_Y;
+                                        const y = center + k * GRID_CELL_SIZE + GRID_OFFSET_Y;
                                         if (y < 0 || y > serverInfo.mapSize) continue;
                                         const start = monumentToScreen(0, y);
                                         const end = monumentToScreen(serverInfo.mapSize, y);
@@ -654,20 +882,20 @@ export default function MapPage() {
                                     }
 
                                     // Labels
-                                    const kStartRow = Math.floor((serverInfo.mapSize - center - GRID_OFFSET_Y) / 146.3) - 1;
-                                    const kStartCol = Math.floor(-(center + GRID_OFFSET_X) / 146.3) + 1;
+                                    const kStartRow = Math.floor((serverInfo.mapSize - center - GRID_OFFSET_Y) / GRID_CELL_SIZE) - 1;
+                                    const kStartCol = Math.floor(-(center + GRID_OFFSET_X) / GRID_CELL_SIZE) + 1;
 
                                     for (let kY = kStartRow; kY >= kMinY; kY--) {
                                         const rowIdx = kStartRow - kY;
-                                        const yTop = center + (kY + 1) * 146.3 + GRID_OFFSET_Y;
+                                        const yTop = center + (kY + 1) * GRID_CELL_SIZE + GRID_OFFSET_Y;
 
-                                        if (yTop <= 0 || yTop > serverInfo.mapSize + 146.3) continue;
+                                        if (yTop <= 0 || yTop > serverInfo.mapSize + GRID_CELL_SIZE) continue;
 
                                         for (let kX = kStartCol; kX <= kMaxX; kX++) {
                                             const colIdx = kX - kStartCol;
-                                            const xLeft = center + kX * 146.3 + GRID_OFFSET_X;
+                                            const xLeft = center + kX * GRID_CELL_SIZE + GRID_OFFSET_X;
 
-                                            if (xLeft >= serverInfo.mapSize || xLeft < -146.3) continue;
+                                            if (xLeft >= serverInfo.mapSize || xLeft < -GRID_CELL_SIZE) continue;
 
                                             const pos = monumentToScreen(xLeft, yTop);
 
@@ -747,74 +975,138 @@ export default function MapPage() {
                                     );
                                 })}
 
-                                {/* Map Markers */}
-                                {showMarkers && markers.map((marker, idx) => {
-                                    // Skip player markers as they are handled by the teamInfo loop
-                                    if (marker.type === 1 || marker.type === 'Player') return null;
+                                {/* Clustered Vending Machines */}
+                                {showMarkers && vendingClusters.map((cluster) => {
+                                    const pos = monumentToScreen(cluster.x, cluster.y);
+                                    const baseRadius = Math.max(8, 12 / scale);
 
-                                    const pos = monumentToScreen(marker.x, marker.y);
-                                    const baseRadius = Math.max(4, 8 / scale);
-                                    const isVending = marker.type === 3 || marker.type === 'VendingMachine';
-                                    // Increase vending machine size by 50%
-                                    const radius = isVending ? baseRadius * 1.5 : baseRadius;
-                                    const stroke = Math.max(1, 2 / scale);
-                                    const isHovered = hoveredMarkerIndex === idx;
-
-                                    // Empty shops (no sellOrders) show as orange, like in-game
-                                    const hasItems = marker.sellOrders && marker.sellOrders.length > 0;
-                                    const markerColor = isVending
-                                        ? (hasItems ? '#10b981' : '#d97706') // Green if has items, Darker orange if empty
-                                        : getMarkerColor(marker.type);
+                                    // Check if any marker in cluster is highlighted
+                                    const isHighlighted = cluster.markers.some(m => highlightedVendors.includes(m.id));
+                                    const isHovered = hoveredClusterId === cluster.id;
 
                                     return (
                                         <g
-                                            key={`marker-${idx}`}
-                                            className="group"
-                                            style={{ pointerEvents: 'auto' }}
-                                            onMouseEnter={() => handleMarkerEnter(idx)}
+                                            key={cluster.id}
+                                            className={`group ${isHighlighted ? 'bounce-vendor' : ''}`}
+                                            style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                                            onMouseEnter={() => handleClusterEnter(cluster.id)}
                                             onMouseLeave={handleMarkerLeave}
+                                            onClick={() => cluster.count > 1 ? setClickedClusterId(cluster.id) : null}
                                         >
-                                            <circle
-                                                cx={pos.x}
-                                                cy={pos.y}
-                                                r={radius}
-                                                fill={markerColor}
-                                                stroke={isVending ? "black" : "white"}
-                                                strokeWidth={stroke}
-                                                className="drop-shadow-lg cursor-pointer transition-all"
-                                            />
-                                            {/* Shopping cart icon for vending machines */}
-                                            {isVending && (
-                                                <g transform={`translate(${pos.x}, ${pos.y})`}>
-                                                    <path
-                                                        d="M -2.5 -1.5 L -1.5 -1.5 L -0.5 1.5 L 2 1.5 M 0 1.5 L 0.5 -0.5 L 2.5 -0.5 M 0.3 2.2 A 0.3 0.3 0 1 1 0.3 2.21 M 1.8 2.2 A 0.3 0.3 0 1 1 1.8 2.21"
-                                                        stroke="black"
-                                                        strokeWidth={0.4}
+                                            {cluster.count > 1 ? (
+                                                // Cluster icon (bright green ring with white text on black background)
+                                                <>
+                                                    {/* Pulsing ring for highlighted clusters */}
+                                                    {isHighlighted && (
+                                                        <circle
+                                                            cx={pos.x}
+                                                            cy={pos.y}
+                                                            r={baseRadius * 1.8}
+                                                            fill="none"
+                                                            stroke="#facc15"
+                                                            strokeWidth={Math.max(2, 3 / scale)}
+                                                            className="animate-pulse opacity-80"
+                                                        />
+                                                    )}
+                                                    {/* Bright green ring */}
+                                                    <circle
+                                                        cx={pos.x}
+                                                        cy={pos.y}
+                                                        r={baseRadius}
                                                         fill="none"
-                                                        strokeLinecap="round"
-                                                        strokeLinejoin="round"
-                                                        transform={`scale(${1 / scale})`}
+                                                        stroke="#10b981"
+                                                        strokeWidth={Math.max(2, 3 / scale)}
+                                                        className="drop-shadow-lg"
                                                     />
-                                                </g>
+                                                    {/* Semi-transparent black background for number */}
+                                                    <circle
+                                                        cx={pos.x}
+                                                        cy={pos.y}
+                                                        r={baseRadius * 0.65}
+                                                        fill="rgba(0, 0, 0, 0.7)"
+                                                        className="drop-shadow-md"
+                                                    />
+                                                    {/* White count number */}
+                                                    <text
+                                                        x={pos.x}
+                                                        y={pos.y}
+                                                        fill="#ffffff"
+                                                        fontSize={Math.max(12, 14 / scale)}
+                                                        fontWeight="bold"
+                                                        textAnchor="middle"
+                                                        dominantBaseline="central"
+                                                        className="pointer-events-none select-none"
+                                                    >
+                                                        {cluster.count}
+                                                    </text>
+                                                </>
+                                            ) : (
+                                                // Single vendor - show shopping cart icon
+                                                <>
+                                                    {isHighlighted && (
+                                                        <circle
+                                                            cx={pos.x}
+                                                            cy={pos.y}
+                                                            r={baseRadius * 1.5}
+                                                            fill="none"
+                                                            stroke="#facc15"
+                                                            strokeWidth={Math.max(2, 3 / scale)}
+                                                            className="animate-pulse opacity-80"
+                                                        />
+                                                    )}
+                                                    <circle
+                                                        cx={pos.x}
+                                                        cy={pos.y}
+                                                        r={baseRadius * 0.9}
+                                                        fill={isHighlighted ? '#06b6d4' : '#10b981'}
+                                                        stroke="black"
+                                                        strokeWidth={Math.max(1.5, 2 / scale)}
+                                                        className="drop-shadow-lg"
+                                                    />
+                                                    {/* Shopping cart icon */}
+                                                    <g transform={`translate(${pos.x}, ${pos.y})`}>
+                                                        <path
+                                                            d="M -2.5 -1.5 L -1.5 -1.5 L -0.5 1.5 L 2 1.5 M 0 1.5 L 0.5 -0.5 L 2.5 -0.5 M 0.3 2.2 A 0.3 0.3 0 1 1 0.3 2.21 M 1.8 2.2 A 0.3 0.3 0 1 1 1.8 2.21"
+                                                            stroke="black"
+                                                            strokeWidth={0.4}
+                                                            fill="none"
+                                                            strokeLinecap="round"
+                                                            strokeLinejoin="round"
+                                                            transform={`scale(${1 / scale})`}
+                                                        />
+                                                    </g>
+                                                </>
                                             )}
-                                            {isVending && marker.sellOrders && marker.sellOrders.length > 0 && isHovered && (
+                                            {/* Hover tooltip */}
+                                            {isHovered && cluster.count > 1 && (
+                                                <foreignObject
+                                                    x={pos.x + 15}
+                                                    y={pos.y - 20}
+                                                    width="200"
+                                                    height="50"
+                                                    className="overflow-visible pointer-events-none"
+                                                >
+                                                    <div className="bg-yellow-400 text-black px-3 py-1.5 rounded text-sm font-bold shadow-lg whitespace-nowrap">
+                                                        Multiple Vending Machines
+                                                    </div>
+                                                </foreignObject>
+                                            )}
+                                            {/* Single vendor hover - show items */}
+                                            {isHovered && cluster.count === 1 && (
                                                 <foreignObject
                                                     x={pos.x + 10}
                                                     y={pos.y - 80}
-                                                    width="280"
-                                                    height="300"
-                                                    className="overflow-visible pointer-events-auto"
-                                                    onMouseEnter={() => handleMarkerEnter(idx)}
-                                                    onMouseLeave={handleMarkerLeave}
+                                                    width="300"
+                                                    height="400"
+                                                    className="overflow-visible pointer-events-none"
                                                 >
-                                                    <div className="bg-neutral-900/95 text-white p-3 rounded-lg text-xs border border-neutral-600 shadow-2xl">
+                                                    <div className="bg-neutral-900/95 text-white p-3 rounded-lg text-xs border border-neutral-600 shadow-2xl max-h-96 overflow-y-auto">
                                                         <div className="font-bold mb-2 pb-2 border-b border-neutral-600 text-sm text-green-400">
-                                                            {marker.name || 'A Shop'}
+                                                            {cluster.markers[0].name || 'A Shop'}
                                                         </div>
-                                                        {marker.sellOrders.slice(0, 5).map((order: any, i: number) => {
+                                                        {cluster.markers[0].sellOrders?.slice(0, 5).map((order: any, i: number) => {
                                                             const sellingItem = getItemInfo(order.itemId);
                                                             const costItem = getItemInfo(order.currencyId);
-
                                                             return (
                                                                 <div key={i} className="mb-2 pb-2 border-b border-neutral-700 last:border-0">
                                                                     <div className="flex items-center gap-2 mb-1">
@@ -850,6 +1142,33 @@ export default function MapPage() {
                                                     </div>
                                                 </foreignObject>
                                             )}
+                                        </g>
+                                    );
+                                })}
+
+                                {/* Non-vending markers (events, etc.) */}
+                                {showMarkers && markers.map((marker, idx) => {
+                                    // Only render non-vending markers here (vending is handled by clusters above)
+                                    const isVending = marker.type === 3 || marker.type === 'VendingMachine';
+                                    if (isVending || marker.type === 1 || marker.type === 'Player') return null;
+
+                                    const pos = monumentToScreen(marker.x, marker.y);
+                                    const baseRadius = Math.max(4, 8 / scale);
+                                    const radius = baseRadius;
+                                    const stroke = Math.max(1, 2 / scale);
+                                    const markerColor = getMarkerColor(marker.type);
+
+                                    return (
+                                        <g key={`marker-${idx}`}>
+                                            <circle
+                                                cx={pos.x}
+                                                cy={pos.y}
+                                                r={radius}
+                                                fill={markerColor}
+                                                stroke="white"
+                                                strokeWidth={stroke}
+                                                className="drop-shadow-lg"
+                                            />
                                         </g>
                                     );
                                 })}
@@ -997,6 +1316,123 @@ export default function MapPage() {
                     </div>
                 )}
             </div>
+
+            {/* Chat Overlay */}
+            <ChatOverlay serverId={serverId} userId={userId} />
+
+            {/* Shopping Sidebar */}
+            <MapSidebar
+                serverId={serverId}
+                onItemSearch={handleItemSearch}
+                onClearHighlights={handleClearHighlights}
+            />
+
+            {/* Cluster Click Modal */}
+            {clickedClusterId && (() => {
+                const cluster = vendingClusters.find(c => c.id === clickedClusterId);
+                if (!cluster) return null;
+
+                return (
+                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setClickedClusterId(null)}>
+                        <div className="bg-neutral-800 rounded-lg w-[400px] max-h-[600px] flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                            {/* Header */}
+                            <div className="flex items-center justify-between p-4 border-b border-neutral-700">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center text-white font-bold">
+                                        {cluster.count}
+                                    </div>
+                                    <h2 className="text-white font-bold text-lg">{cluster.count} VENDORS</h2>
+                                </div>
+                                <button
+                                    onClick={() => setClickedClusterId(null)}
+                                    className="text-neutral-400 hover:text-white transition-colors"
+                                >
+                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            {/* Vendor List */}
+                            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                                {cluster.markers.map((vendor, idx) => {
+                                    const vendorKey = `${cluster.id}-${idx}`;
+                                    const isExpanded = expandedVendors[vendorKey];
+                                    const itemCount = vendor.sellOrders?.length || 0;
+
+                                    return (
+                                        <div key={vendorKey} className="bg-neutral-700/50 rounded-lg border border-neutral-600">
+                                            {/* Vendor Header - Clickable to expand/collapse */}
+                                            <button
+                                                onClick={() => setExpandedVendors(prev => ({ ...prev, [vendorKey]: !isExpanded }))}
+                                                className="w-full flex items-center justify-between p-3 hover:bg-neutral-700/70 transition-colors"
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <ShoppingCart className="w-5 h-5 text-green-400" />
+                                                    <div className="text-left">
+                                                        <div className="text-white font-semibold">{vendor.name || `Vendor ${idx + 1}`}</div>
+                                                        <div className="text-xs text-neutral-400">{itemCount} items for sale</div>
+                                                    </div>
+                                                </div>
+                                                <svg
+                                                    className={`w-5 h-5 text-neutral-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                >
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                                </svg>
+                                            </button>
+
+                                            {/* Expanded Item List */}
+                                            {isExpanded && vendor.sellOrders && vendor.sellOrders.length > 0 && (
+                                                <div className="border-t border-neutral-600 p-3 space-y-2 bg-neutral-800/50">
+                                                    {vendor.sellOrders.slice(0, 10).map((order: any, i: number) => {
+                                                        const sellingItem = getItemInfo(order.itemId);
+                                                        const costItem = getItemInfo(order.currencyId);
+                                                        return (
+                                                            <div key={i} className="flex items-start gap-3 pb-2 border-b border-neutral-700 last:border-0">
+                                                                <div className="flex-1">
+                                                                    <div className="flex items-center gap-2 mb-1">
+                                                                        {sellingItem?.iconUrl && (
+                                                                            <img src={sellingItem.iconUrl} alt="" className="w-6 h-6" />
+                                                                        )}
+                                                                        <div className="text-sm text-green-400 font-semibold">
+                                                                            {order.quantity}x {sellingItem?.name || `Item #${order.itemId}`}
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        {costItem?.iconUrl && (
+                                                                            <img src={costItem.iconUrl} alt="" className="w-6 h-6" />
+                                                                        )}
+                                                                        <div className="text-sm text-yellow-400">
+                                                                            {order.costPerItem}x {costItem?.name || `Item #${order.currencyId}`}
+                                                                        </div>
+                                                                    </div>
+                                                                    {order.amountInStock !== undefined && (
+                                                                        <div className="text-xs text-blue-400 mt-1">
+                                                                            Stock: {order.amountInStock}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    {vendor.sellOrders.length > 10 && (
+                                                        <div className="text-xs text-neutral-500 italic text-center pt-1">
+                                                            +{vendor.sellOrders.length - 10} more items...
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
         </div>
     );
 }

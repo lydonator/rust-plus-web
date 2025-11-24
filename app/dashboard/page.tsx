@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useServerConnection } from '@/components/ServerConnectionProvider';
+import ShimDisconnectedModal from '@/components/ShimDisconnectedModal';
 
 export default function Dashboard() {
     const router = useRouter();
@@ -16,6 +17,7 @@ export default function Dashboard() {
     const [formData, setFormData] = useState({ ip: '', port: '', playerId: '', playerToken: '', name: '' });
     const [deleteConfirm, setDeleteConfirm] = useState<{ serverId: string; serverName: string } | null>(null);
     const [connectingServerId, setConnectingServerId] = useState<string | null>(null);
+    const [showShimDisconnected, setShowShimDisconnected] = useState(false);
 
     // Use global server connection state
     const { activeServerId, setActiveServerId } = useServerConnection();
@@ -24,6 +26,18 @@ export default function Dashboard() {
     const { isConnected, lastNotification, disconnectReason, clearDisconnectReason } = useShim(user?.userId || null);
 
     useEffect(() => {
+        // Check for shim disconnection flag and show modal
+        const shimDisconnected = sessionStorage.getItem('shimDisconnected');
+        if (shimDisconnected === 'true') {
+            setShowShimDisconnected(true);
+            sessionStorage.removeItem('shimDisconnected');
+
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                setShowShimDisconnected(false);
+            }, 5000);
+        }
+
         // Fetch user info
         fetch('/api/auth/me')
             .then(res => res.ok ? res.json() : null)
@@ -426,6 +440,9 @@ export default function Dashboard() {
                 onCancel={() => setDeleteConfirm(null)}
                 variant="danger"
             />
+
+            {/* Shim Disconnection Modal */}
+            <ShimDisconnectedModal isVisible={showShimDisconnected} />
         </main>
     );
 }

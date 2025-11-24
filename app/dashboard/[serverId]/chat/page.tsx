@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { Send, User, AlertTriangle, Anchor, Plane, Box, Flame } from 'lucide-react';
 import { useShim } from '@/hooks/useShim';
+import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 
 interface ChatMessage {
     id: string;
@@ -16,6 +17,8 @@ interface ChatMessage {
 }
 
 export default function ChatPage() {
+    useShimConnectionGuard();
+
     const params = useParams();
     const serverId = params.serverId as string;
     const [messages, setMessages] = useState<ChatMessage[]>([]);

@@ -4,14 +4,16 @@ const supabase = require('./supabase');
 class RustPlusManager {
     constructor() {
         this.activeConnections = new Map(); // serverId -> RustPlus instance
-        this.serverInfoIntervals = new Map(); // serverId -> interval ID for server info fetching
-        this.mapDataIntervals = new Map(); // serverId -> interval IDs for map data fetching
+        this.serverInfoIntervals = new Map(); // serverId -> interval ID for server info fetching (DEPRECATED - migrating to BullMQ)
+        this.mapDataIntervals = new Map(); // serverId -> interval IDs for map data fetching (DEPRECATED - migrating to BullMQ)
         this.previousMarkers = new Map(); // serverId -> Set of marker IDs for event tracking
         this.sseCallback = null; // Function to forward events to SSE clients
         this.serverFailureCounts = new Map(); // serverId -> consecutive failure count
         this.reconnectAttempts = new Map(); // serverId -> reconnection attempt count
         this.reconnectTimeouts = new Map(); // serverId -> timeout ID for pending reconnection
         this.intentionalDisconnects = new Set(); // serverIds that were intentionally disconnected
+        this.shoppingListAlerts = new Map(); // serverId -> Set of alerted item IDs to prevent spam
+        this.queueManager = null; // BullMQ queue manager for job scheduling (Phase 3)
 
         // Listen for server deletions (Manual Removal from Frontend)
         const channel = supabase
@@ -38,6 +40,11 @@ class RustPlusManager {
 
     setSSECallback(callback) {
         this.sseCallback = callback;
+    }
+
+    setQueueManager(queueManager) {
+        this.queueManager = queueManager;
+        console.log('[RustPlus] Queue manager set for job scheduling');
     }
 
     async connectToServer(serverId, serverInfo) {
@@ -212,21 +219,27 @@ class RustPlusManager {
         });
     }
 
-    clearIntervalsForServer(serverId) {
-        // Clean up server info interval
+    async clearIntervalsForServer(serverId) {
+        // Clean up BullMQ jobs if queue manager is available
+        if (this.queueManager) {
+            await this.queueManager.removeRepeatingJob('rustplus', `server-info-${serverId}`);
+            await this.queueManager.removeRepeatingJob('rustplus', `map-data-${serverId}`);
+            await this.queueManager.removeRepeatingJob('rustplus', `team-info-${serverId}`);
+            console.log(`[RustPlus] Removed BullMQ jobs for server ${serverId}`);
+        }
+
+        // Clean up legacy setInterval intervals (if any)
         if (this.serverInfoIntervals.has(serverId)) {
             clearInterval(this.serverInfoIntervals.get(serverId));
             this.serverInfoIntervals.delete(serverId);
         }
 
-        // Clean up map data intervals
         if (this.mapDataIntervals.has(serverId)) {
             const intervals = this.mapDataIntervals.get(serverId);
             clearInterval(intervals.markers);
             clearInterval(intervals.team);
             this.mapDataIntervals.delete(serverId);
         }
-
     }
 
     disconnectServer(serverId) {
@@ -458,7 +471,7 @@ class RustPlusManager {
     }
 
     // Command methods
-    async sendRequest(serverId, request, callback) {
+    async sendRequest(serverId, request, callback, timeoutMs = 5000) {
         const rustPlus = this.activeConnections.get(serverId);
         if (!rustPlus) {
             // Silently return if not connected (server might be in cleanup)
@@ -467,8 +480,22 @@ class RustPlusManager {
             return;
         }
 
+        // Set timeout for request
+        let callbackCalled = false;
+        const timeoutId = setTimeout(() => {
+            if (!callbackCalled) {
+                console.warn(`[RustPlus] Request timed out after ${timeoutMs}ms for server ${serverId}`);
+                callbackCalled = true;
+                if (callback) callback(null);
+            }
+        }, timeoutMs);
+
         rustPlus.sendRequest(request, (message) => {
-            if (callback) callback(message);
+            if (!callbackCalled) {
+                clearTimeout(timeoutId);
+                callbackCalled = true;
+                if (callback) callback(message);
+            }
         });
     }
 
@@ -761,6 +788,9 @@ class RustPlusManager {
 
                     // Track game events based on markers
                     this.trackMapEvents(serverId, markers);
+
+                    // Check shopping list for tracked items
+                    this.checkShoppingList(serverId, markers);
                 }
             });
         } catch (error) {
@@ -814,6 +844,111 @@ class RustPlusManager {
 
         // Update previous markers state
         this.previousMarkers.set(serverId, currentMarkers);
+    }
+
+    // Check shopping list for tracked items in vending machines
+    async checkShoppingList(serverId, markers) {
+        try {
+            // Get user_id for this server
+            const { data: server, error: serverError } = await supabase
+                .from('servers')
+                .select('user_id')
+                .eq('id', serverId)
+                .single();
+
+            if (serverError || !server) {
+                return;
+            }
+
+            // Get shopping list items for this server
+            const { data: shoppingList, error: listError } = await supabase
+                .from('shopping_lists')
+                .select('*')
+                .eq('server_id', serverId);
+
+            if (listError || !shoppingList || shoppingList.length === 0) {
+                // If shopping list is empty, clear all alerts for this server
+                if (this.shoppingListAlerts.has(serverId)) {
+                    console.log(`[Shopping] 🗑️ Shopping list empty, clearing all alerts for server`);
+                    this.shoppingListAlerts.delete(serverId);
+                }
+                return;
+            }
+
+            // Clean up alerts for items no longer in the shopping list (do this FIRST)
+            if (this.shoppingListAlerts.has(serverId)) {
+                const alertedItems = this.shoppingListAlerts.get(serverId);
+                const currentItemIds = new Set(shoppingList.map(item => item.item_id));
+
+                console.log(`[Shopping] 🔍 Current alerted items:`, Array.from(alertedItems));
+                console.log(`[Shopping] 📋 Current shopping list items:`, Array.from(currentItemIds));
+
+                // Remove alerts for items that were removed from the shopping list
+                for (const itemId of alertedItems) {
+                    if (!currentItemIds.has(itemId)) {
+                        alertedItems.delete(itemId);
+                        console.log(`[Shopping] 🗑️ Cleared alert for item ${itemId} (removed from shopping list)`);
+                    }
+                }
+            }
+
+            // Extract vending machine markers (type 3)
+            const vendingMachines = markers.filter(m => m.type === 3 || m.type === 'VendingMachine');
+
+            // Check each shopping list item
+            for (const listItem of shoppingList) {
+                // Find vending machines selling this item
+                const vendorsWithItem = [];
+
+                for (const vm of vendingMachines) {
+                    if (!vm.sellOrders || vm.sellOrders.length === 0) continue;
+
+                    // Check if this vending machine has the tracked item
+                    const hasItem = vm.sellOrders.some(order =>
+                        order.itemId === listItem.item_id && order.amountInStock > 0
+                    );
+
+                    if (hasItem) {
+                        vendorsWithItem.push({
+                            name: vm.name || 'Unnamed Shop',
+                            x: vm.x,
+                            y: vm.y,
+                            sellOrders: vm.sellOrders.filter(o => o.itemId === listItem.item_id)
+                        });
+                    }
+                }
+
+                // If we found vendors with this item, send notification
+                if (vendorsWithItem.length > 0) {
+                    // Check if we've already alerted for this item
+                    if (!this.shoppingListAlerts.has(serverId)) {
+                        this.shoppingListAlerts.set(serverId, new Set());
+                    }
+
+                    const alertedItems = this.shoppingListAlerts.get(serverId);
+
+                    console.log(`[Shopping] ✅ Found vendors for ${listItem.item_name} (ID: ${listItem.item_id})`);
+                    console.log(`[Shopping] 🔍 Already alerted? ${alertedItems.has(listItem.item_id)}`);
+
+                    // Only send alert if this is the first time we've found this item
+                    if (!alertedItems.has(listItem.item_id)) {
+                        console.log(`[Shopping] 🛒 Sending alert: ${vendorsWithItem.length} vendor(s) selling ${listItem.item_name}`);
+
+                        alertedItems.add(listItem.item_id);
+
+                        // Emit SSE event for shopping list match
+                        this.emitToSSE(serverId, 'shopping_list_match', {
+                            item: listItem,
+                            vendors: vendorsWithItem
+                        });
+                    } else {
+                        console.log(`[Shopping] ⏭️ Skipping alert for ${listItem.item_name} - already sent`);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`[Shopping] Error checking shopping list for ${serverId}:`, error.message);
+        }
     }
 
     // Fetch team info and emit SSE event
@@ -920,8 +1055,45 @@ class RustPlusManager {
             this.serverFailureCounts.delete(serverId);
         }
     }
-    // Helper to set polling intervals
-    setPollingIntervals(serverId, rustPlus) {
+    // Helper to set polling intervals using BullMQ (Phase 3)
+    async setPollingIntervals(serverId, rustPlus) {
+        if (!this.queueManager) {
+            console.warn('[RustPlus] Queue manager not set, falling back to setInterval (legacy mode)');
+            return this.setPollingIntervalsLegacy(serverId, rustPlus);
+        }
+
+        // Clear existing repeatable jobs for this server
+        await this.queueManager.removeRepeatingJob('rustplus', `server-info-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `map-data-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `team-info-${serverId}`);
+
+        // Schedule new repeatable jobs
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `server-info-${serverId}`,
+            { serverId },
+            { pattern: '*/30 * * * * *' } // Every 30 seconds
+        );
+
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `map-data-${serverId}`,
+            { serverId },
+            { pattern: '*/30 * * * * *' } // Every 30 seconds
+        );
+
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `team-info-${serverId}`,
+            { serverId },
+            { pattern: '*/10 * * * * *' } // Every 10 seconds
+        );
+
+        console.log(`[RustPlus] ✅ Scheduled BullMQ jobs for server ${serverId}`);
+    }
+
+    // Legacy fallback: Use setInterval if BullMQ is not available
+    setPollingIntervalsLegacy(serverId, rustPlus) {
         // Clear existing intervals
         if (this.serverInfoIntervals.has(serverId)) {
             clearInterval(this.serverInfoIntervals.get(serverId));
@@ -959,27 +1131,6 @@ class RustPlusManager {
     async checkAlarmWorkflows(serverId, alarmEntityId) {
         try {
             console.log(`[Workflows] 🔔 Alarm ${alarmEntityId} triggered, checking for workflows...`);
-
-            // Get the alarm's actual message from RustPlus API
-            let alarmMessage = `Alarm #${alarmEntityId}`;
-
-            const rustPlus = this.activeConnections.get(serverId);
-            if (rustPlus) {
-                // Fetch entity info to get the alarm's custom message
-                await new Promise((resolve) => {
-                    rustPlus.getEntityInfo(alarmEntityId, (message) => {
-                        if (message.response && message.response.entityInfo) {
-                            const info = message.response.entityInfo;
-                            // The alarm message is stored in the payload's message field
-                            if (info.payload && info.payload.message) {
-                                alarmMessage = info.payload.message;
-                                console.log(`[Workflows] Alarm message from game: "${alarmMessage}"`);
-                            }
-                        }
-                        resolve();
-                    });
-                });
-            }
 
             // Fetch enabled workflows with alarm triggers for this alarm
             const { data: workflows, error } = await supabase
@@ -1019,7 +1170,7 @@ class RustPlusManager {
 
                 for (const action of actions) {
                     try {
-                        await this.executeWorkflowAction(serverId, action, { alarmMessage });
+                        await this.executeWorkflowAction(serverId, action);
                     } catch (err) {
                         console.error(`[Workflows] Error executing action:`, err);
                     }
@@ -1060,10 +1211,8 @@ class RustPlusManager {
                 break;
 
             case 'notify':
-                // Send team chat message with alarm info
-                const message = context.alarmMessage
-                    ? `Smart Alarm: ${context.alarmMessage}`
-                    : (action_config.message || 'Workflow notification');
+                // Send team chat message with custom message from workflow config
+                const message = action_config.message || 'Workflow notification';
 
                 console.log(`[Workflows] Sending team notification: ${message}`);
 
@@ -1076,6 +1225,14 @@ class RustPlusManager {
                 });
                 break;
         }
+    }
+
+    /**
+     * Get the number of active RustPlus connections
+     * @returns {number}
+     */
+    getConnectionCount() {
+        return this.activeConnections.size;
     }
 
 }

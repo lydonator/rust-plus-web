@@ -1,0 +1,219 @@
+const logger = require('./logger');
+const rustPlusManager = require('./rustplus-manager');
+const stateManager = require('./state-manager');
+const supabase = require('./supabase');
+
+/**
+ * Job Processors for BullMQ
+ * Handles all background job processing for RustPlus operations
+ */
+
+/**
+ * Process server info fetch job
+ * Fetches server information (players, map size, etc.) every 30 seconds
+ */
+async function processServerInfoJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching server info for ${serverId}`);
+
+        // Get RustPlus instance
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        // Delegate to RustPlusManager
+        await rustPlusManager.fetchAndEmitServerInfo(serverId, rustPlus);
+
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch server info for ${serverId}`, {
+            error: error.message
+        });
+        throw error; // Let BullMQ handle retries
+    }
+}
+
+/**
+ * Process map data fetch job
+ * Fetches map markers (vending machines, events) every 30 seconds
+ */
+async function processMapDataJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching map data for ${serverId}`);
+
+        // Get RustPlus instance
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        // Delegate to RustPlusManager
+        await rustPlusManager.fetchAndEmitMapData(serverId, rustPlus);
+
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch map data for ${serverId}`, {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
+ * Process team info fetch job
+ * Fetches team member information every 10 seconds
+ */
+async function processTeamInfoJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching team info for ${serverId}`);
+
+        // Get RustPlus instance
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        // Delegate to RustPlusManager
+        await rustPlusManager.fetchAndEmitTeamInfo(serverId, rustPlus);
+
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch team info for ${serverId}`, {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
+ * Process inactivity check job
+ * Checks all users for inactivity and disconnects inactive servers
+ * Runs every 5 minutes
+ */
+async function processInactivityCheckJob(job) {
+    try {
+        logger.info('JobProcessor', 'Running inactivity check');
+
+        const INACTIVITY_THRESHOLD = 30 * 60 * 1000; // 30 minutes
+        const now = Date.now();
+        let inactiveUsers = [];
+
+        // Get all servers from database
+        const { data: servers, error } = await supabase
+            .from('servers')
+            .select('id, user_id');
+
+        if (error) {
+            logger.error('JobProcessor', 'Failed to fetch servers for inactivity check', {
+                error: error.message
+            });
+            return { success: false, error: error.message };
+        }
+
+        // Check each user's last activity
+        const userActivityMap = new Map();
+        for (const server of servers) {
+            if (!userActivityMap.has(server.user_id)) {
+                const lastActivity = await stateManager.getUserActivity(server.user_id);
+                userActivityMap.set(server.user_id, lastActivity);
+            }
+        }
+
+        // Find inactive users
+        for (const [userId, lastActivity] of userActivityMap.entries()) {
+            if (lastActivity && (now - lastActivity) > INACTIVITY_THRESHOLD) {
+                inactiveUsers.push(userId);
+            }
+        }
+
+        // Disconnect servers for inactive users
+        for (const userId of inactiveUsers) {
+            logger.info('JobProcessor', `User ${userId} inactive, disconnecting servers`);
+
+            // Get all servers for this user
+            const userServers = servers.filter(s => s.user_id === userId);
+
+            for (const server of userServers) {
+                rustPlusManager.disconnectServer(server.id);
+            }
+
+            // Clear activity tracking
+            await stateManager.deleteUserActivity(userId);
+            await stateManager.deleteActiveServer(userId);
+        }
+
+        logger.info('JobProcessor', `Inactivity check complete`, {
+            totalUsers: userActivityMap.size,
+            inactiveUsers: inactiveUsers.length
+        });
+
+        return {
+            success: true,
+            totalUsers: userActivityMap.size,
+            inactiveUsers: inactiveUsers.length
+        };
+    } catch (error) {
+        logger.error('JobProcessor', 'Inactivity check failed', { error: error.message });
+        throw error;
+    }
+}
+
+/**
+ * Main job processor router
+ * Routes jobs to appropriate processors based on job name
+ */
+async function processJob(job) {
+    logger.debug('JobProcessor', `Processing job: ${job.name}`, {
+        jobId: job.id,
+        attempt: job.attemptsMade + 1
+    });
+
+    // Handle job names with patterns (e.g., server-info-<serverId>)
+    if (job.name.startsWith('server-info-')) {
+        return await processServerInfoJob(job);
+    }
+
+    if (job.name.startsWith('map-data-')) {
+        return await processMapDataJob(job);
+    }
+
+    if (job.name.startsWith('team-info-')) {
+        return await processTeamInfoJob(job);
+    }
+
+    switch (job.name) {
+        case 'server-info':
+            return await processServerInfoJob(job);
+
+        case 'map-data':
+            return await processMapDataJob(job);
+
+        case 'team-info':
+            return await processTeamInfoJob(job);
+
+        case 'inactivity-check':
+            return await processInactivityCheckJob(job);
+
+        default:
+            logger.warn('JobProcessor', `Unknown job type: ${job.name}`);
+            return { success: false, error: 'Unknown job type' };
+    }
+}
+
+module.exports = {
+    processJob,
+    processServerInfoJob,
+    processMapDataJob,
+    processTeamInfoJob,
+    processInactivityCheckJob
+};

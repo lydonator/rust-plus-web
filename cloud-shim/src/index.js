@@ -3,20 +3,121 @@ const { PORT } = require('./config');
 const fcmManager = require('./fcm-manager');
 const rustPlusManager = require('./rustplus-manager');
 const supabase = require('./supabase');
+const stateManager = require('./state-manager');
+const rateLimiter = require('./rate-limiter');
+const logger = require('./logger');
+const queueManager = require('./queue-manager');
+const { processJob } = require('./job-processors');
 
-// Track SSE clients: userId -> response object
+// ========================================
+// Security: Input Validation
+// ========================================
+
+/**
+ * Validates UUID format (8-4-4-4-12 hex pattern)
+ * @param {string} id - The UUID to validate
+ * @returns {boolean} True if valid UUID format
+ */
+function isValidUUID(id) {
+    if (!id || typeof id !== 'string') return false;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(id);
+}
+
+/**
+ * Sanitizes and validates userId parameter
+ * @param {string} userId - The userId to validate
+ * @returns {string|null} Trimmed userId if valid, null otherwise
+ */
+function validateUserId(userId) {
+    if (!userId || typeof userId !== 'string') return null;
+    const trimmed = userId.trim();
+    if (!isValidUUID(trimmed)) {
+        console.warn(`[Security] Invalid userId format: ${userId}`);
+        return null;
+    }
+    return trimmed;
+}
+
+/**
+ * Sanitizes and validates serverId parameter
+ * @param {string} serverId - The serverId to validate
+ * @returns {string|null} Trimmed serverId if valid, null otherwise
+ */
+function validateServerId(serverId) {
+    if (!serverId || typeof serverId !== 'string') return null;
+    const trimmed = serverId.trim();
+    if (!isValidUUID(trimmed)) {
+        console.warn(`[Security] Invalid serverId format: ${serverId}`);
+        return null;
+    }
+    return trimmed;
+}
+
+// Track SSE clients: userId -> { res, lastWrite, subscriptions }
 const sseClients = new Map();
 
 // Track disconnect timeouts for graceful cleanup
 const disconnectTimeouts = new Map();
 
+// SSE Watchdog: Monitor for hung/dead sockets
+const SSE_TIMEOUT_MS = 60000; // 60 seconds
+setInterval(() => {
+    const now = Date.now();
+    for (const [userId, clientData] of sseClients.entries()) {
+        const timeSinceLastWrite = now - clientData.lastWrite;
+        if (timeSinceLastWrite > SSE_TIMEOUT_MS) {
+            console.warn(`[SSE Watchdog] Detected hung socket for user ${userId} (${timeSinceLastWrite}ms since last write). Force closing...`);
+            try {
+                clientData.res.end();
+            } catch (e) {
+                console.error(`[SSE Watchdog] Error closing hung socket:`, e.message);
+            }
+            sseClients.delete(userId);
+
+            // Stop FCM listener for this user
+            fcmManager.stopListening(userId);
+        }
+    }
+}, 15000); // Check every 15 seconds
+
 // Activity tracking for inactivity detection
-const userActivity = new Map(); // userId -> last activity timestamp
-const activeServerByUser = new Map(); // userId -> serverId
-const countdownTimers = new Map(); // userId -> countdown interval ID
+// MIGRATED TO REDIS via stateManager (Phase 2.2)
+// Legacy in-memory maps kept as reference:
+// const userActivity = new Map(); // NOW: stateManager.setUserActivity()
+// const activeServerByUser = new Map(); // NOW: stateManager.setActiveServer()
+const countdownTimers = new Map(); // userId -> countdown interval ID (stays in-memory)
 
 const server = http.createServer(async (req, res) => {
-    // Enable CORS - always allow localhost for development
+    // ========================================
+    // Security Headers
+    // ========================================
+
+    // Prevent MIME type sniffing
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    // Prevent clickjacking attacks
+    res.setHeader('X-Frame-Options', 'DENY');
+
+    // Enable XSS protection in older browsers
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+
+    // Prevent browsers from sending referrer information
+    res.setHeader('Referrer-Policy', 'no-referrer');
+
+    // Content Security Policy (strict for API server)
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+
+    // Strict Transport Security (HSTS) - enforce HTTPS (only set if HTTPS)
+    if (req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https') {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+
+    // ========================================
+    // CORS Configuration
+    // ========================================
+
+    // Whitelist only specific origins (no wildcards)
     const allowedOrigins = [
         'https://app.rustplus.online',
         'http://localhost:3000',
@@ -27,34 +128,47 @@ const server = http.createServer(async (req, res) => {
     if (allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else if (origin) {
+        // Log unauthorized origin attempts
+        console.warn(`[Security] Blocked request from unauthorized origin: ${origin}`);
     }
 
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
 
+    // Handle preflight requests
     if (req.method === 'OPTIONS') {
-        res.writeHead(200);
+        res.writeHead(204); // No Content
         res.end();
+        return;
+    }
+
+    // Heartbeat Endpoint: GET /heartbeat
+    if (req.method === 'GET' && req.url === '/heartbeat') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', timestamp: Date.now() }));
         return;
     }
 
     // SSE Endpoint: GET /events/:userId
     if (req.method === 'GET' && req.url.startsWith('/events/')) {
-        const userId = req.url.split('/events/')[1];
+        const rawUserId = req.url.split('/events/')[1];
+        const userId = validateUserId(rawUserId);
 
         if (!userId) {
-            res.writeHead(400);
-            res.end('Missing userId');
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or missing userId' }));
             return;
         }
 
-        console.log(`[SSE] Client connected for user: ${userId}`);
+        logger.info('SSE', 'Client connected', { userId });
 
         // Clear any pending disconnect timeout
         if (disconnectTimeouts.has(userId)) {
             clearTimeout(disconnectTimeouts.get(userId));
             disconnectTimeouts.delete(userId);
-            console.log(`[SSE] Reconnected within grace period for user ${userId}`);
+            logger.info('SSE', 'Reconnected within grace period', { userId });
         }
 
         // Set up SSE headers
@@ -64,8 +178,28 @@ const server = http.createServer(async (req, res) => {
             'Connection': 'keep-alive'
         });
 
-        // Store client
-        sseClients.set(userId, res);
+        // Check if there's already a connection for this user
+        if (sseClients.has(userId)) {
+            logger.warn('SSE', 'Duplicate connection detected, closing old connection', { userId });
+            const oldClientData = sseClients.get(userId);
+
+            // Close old SSE connection
+            try {
+                oldClientData.res.end();
+            } catch (e) {
+                logger.error('SSE', 'Error closing old connection', { userId, error: e.message });
+            }
+
+            // Stop old FCM listener
+            fcmManager.stopListening(userId);
+        }
+
+        // Store new client with metadata
+        sseClients.set(userId, {
+            res,
+            lastWrite: Date.now(),
+            subscriptions: new Set() // Track which servers this user is subscribed to
+        });
 
         // Send initial connection event
         sendSSE(res, 'connected', { userId, timestamp: Date.now() });
@@ -92,23 +226,27 @@ const server = http.createServer(async (req, res) => {
                         entityId: devicePairingResult.entityId
                     });
                 },
-                (serverPairingResult) => {
+                async (serverPairingResult) => {
                     // Server was auto-connected via FCM pairing
                     console.log(`[Shim] Server paired and connected: ${serverPairingResult.serverId}`);
 
                     // Update active server tracking
-                    activeServerByUser.set(serverPairingResult.userId, serverPairingResult.serverId);
+                    await stateManager.setActiveServer(serverPairingResult.userId, serverPairingResult.serverId);
 
                     // Update activity timestamp
-                    userActivity.set(serverPairingResult.userId, Date.now());
+                    await stateManager.setUserActivity(serverPairingResult.userId, Date.now());
 
-                    // Notify client that server is connected
-                    const client = sseClients.get(serverPairingResult.userId);
-                    if (client) {
-                        sendSSE(client, 'server_connected', {
+                    // Add server to user's subscription list
+                    const clientData = sseClients.get(serverPairingResult.userId);
+                    if (clientData) {
+                        clientData.subscriptions.add(serverPairingResult.serverId);
+                        console.log(`[Shim] ✅ User ${serverPairingResult.userId} auto-subscribed to server ${serverPairingResult.serverId}`);
+
+                        // Notify client that server is connected
+                        sendSSE(clientData.res, 'server_connected', {
                             serverId: serverPairingResult.serverId,
                             serverInfo: serverPairingResult.serverInfo
-                        });
+                        }, serverPairingResult.userId);
                     } else {
                         console.error(`[Shim] ❌ Failed to send server_connected event - no SSE client for user ${serverPairingResult.userId}`);
                     }
@@ -154,15 +292,16 @@ const server = http.createServer(async (req, res) => {
 
     // Get Active Server Endpoint: GET /active-server/:userId
     if (req.method === 'GET' && req.url.startsWith('/active-server/')) {
-        const userId = req.url.split('/active-server/')[1];
+        const rawUserId = req.url.split('/active-server/')[1];
+        const userId = validateUserId(rawUserId);
 
         if (!userId) {
-            res.writeHead(400);
-            res.end(JSON.stringify({ error: 'Missing userId' }));
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or missing userId' }));
             return;
         }
 
-        const activeServerId = activeServerByUser.get(userId);
+        const activeServerId = await stateManager.getActiveServer(userId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             activeServerId: activeServerId || null
@@ -176,15 +315,39 @@ const server = http.createServer(async (req, res) => {
         req.on('data', chunk => body += chunk);
         req.on('end', async () => {
             try {
-                const { userId, serverId, command, payload } = JSON.parse(body);
+                const { userId: rawUserId, serverId: rawServerId, command, payload } = JSON.parse(body);
+
+                // Validate inputs
+                const userId = validateUserId(rawUserId);
+                const serverId = validateServerId(rawServerId);
 
                 if (!userId || !serverId || !command) {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: 'Missing required fields' }));
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid or missing required fields' }));
                     return;
                 }
 
-                console.log(`[Command] Received ${command} for server ${serverId} from user ${userId}`);
+                // Rate limiting: 60 requests/minute per user
+                const rateLimit = await rateLimiter.checkLimit('command', userId, 60, 60000);
+                res.setHeader('X-RateLimit-Limit', '60');
+                res.setHeader('X-RateLimit-Remaining', rateLimit.remaining);
+                res.setHeader('X-RateLimit-Reset', rateLimit.resetAt);
+
+                if (!rateLimit.allowed) {
+                    console.warn(`[RateLimiter] Rate limit exceeded for command:${userId}`);
+                    res.writeHead(429, {
+                        'Content-Type': 'application/json',
+                        'Retry-After': Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+                    });
+                    res.end(JSON.stringify({
+                        error: 'Too Many Requests',
+                        message: `Rate limit exceeded. Try again after ${new Date(rateLimit.resetAt).toISOString()}`,
+                        retryAfter: rateLimit.resetAt
+                    }));
+                    return;
+                }
+
+                logger.info('Command', `Received ${command}`, { userId, serverId, command });
 
                 // Verify user owns this server
                 const { data: server, error } = await supabase
@@ -291,6 +454,11 @@ const server = http.createServer(async (req, res) => {
                     case 'getMapMarkers':
                         rustPlusManager.getMapMarkers(serverId, (message) => {
                             try {
+                                if (!message) {
+                                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                                    res.end(JSON.stringify({ error: 'Server not connected' }));
+                                    return;
+                                }
                                 if (message.response && message.response.mapMarkers) {
                                     const markers = message.response.mapMarkers;
                                     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -317,6 +485,11 @@ const server = http.createServer(async (req, res) => {
 
                     case 'getTeamInfo':
                         rustPlusManager.getTeamInfo(serverId, (message) => {
+                            if (!message) {
+                                res.writeHead(503, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ error: 'Server not connected' }));
+                                return;
+                            }
                             if (message.response && message.response.teamInfo) {
                                 const teamInfo = message.response.teamInfo;
                                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -333,6 +506,10 @@ const server = http.createServer(async (req, res) => {
 
                     case 'getServerInfo':
                         rustPlusManager.getServerInfo(serverId, async (message) => {
+                            if (!message) {
+                                res.status(503).json({ error: 'Server not connected' });
+                                return;
+                            }
                             if (message.response && message.response.info) {
                                 const info = message.response.info;
 
@@ -379,6 +556,11 @@ const server = http.createServer(async (req, res) => {
 
                     case 'sendTeamMessage':
                         rustPlusManager.sendTeamMessage(serverId, payload.message, (message) => {
+                            if (!message) {
+                                res.writeHead(503, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ error: 'Server not connected' }));
+                                return;
+                            }
                             if (message.response && message.response.error) {
                                 res.writeHead(500, { 'Content-Type': 'application/json' });
                                 res.end(JSON.stringify({ error: 'Failed to send message' }));
@@ -408,13 +590,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/disconnect-server') {
         let body = '';
         req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
-                const { serverId } = JSON.parse(body);
+                const { serverId: rawServerId } = JSON.parse(body);
+
+                // Validate input
+                const serverId = validateServerId(rawServerId);
 
                 if (!serverId) {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: 'Missing serverId' }));
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid or missing serverId' }));
                     return;
                 }
 
@@ -422,12 +607,10 @@ const server = http.createServer(async (req, res) => {
                 rustPlusManager.disconnectServer(serverId);
 
                 // Clear active server tracking for this server
-                for (const [userId, activeServerId] of activeServerByUser.entries()) {
-                    if (activeServerId === serverId) {
-                        activeServerByUser.delete(userId);
-                        console.log(`[Shim] Cleared active server tracking for user ${userId}`);
-                        break;
-                    }
+                const usersWithServer = await stateManager.getUsersWithActiveServer(serverId);
+                for (const userId of usersWithServer) {
+                    await stateManager.deleteActiveServer(userId);
+                    console.log(`[Shim] Cleared active server tracking for user ${userId}`);
                 }
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -447,28 +630,52 @@ const server = http.createServer(async (req, res) => {
         req.on('data', chunk => body += chunk);
         req.on('end', async () => {
             try {
-                const { userId, serverId } = JSON.parse(body);
+                const { userId: rawUserId, serverId: rawServerId } = JSON.parse(body);
+
+                // Validate inputs
+                const userId = validateUserId(rawUserId);
+                const serverId = validateServerId(rawServerId);
 
                 if (!userId || !serverId) {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: 'Missing userId or serverId' }));
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid or missing userId or serverId' }));
+                    return;
+                }
+
+                // Rate limiting: 10 requests/minute per user
+                const rateLimit = await rateLimiter.checkLimit('connect-server', userId, 10, 60000);
+                res.setHeader('X-RateLimit-Limit', '10');
+                res.setHeader('X-RateLimit-Remaining', rateLimit.remaining);
+                res.setHeader('X-RateLimit-Reset', rateLimit.resetAt);
+
+                if (!rateLimit.allowed) {
+                    console.warn(`[RateLimiter] Rate limit exceeded for connect-server:${userId}`);
+                    res.writeHead(429, {
+                        'Content-Type': 'application/json',
+                        'Retry-After': Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+                    });
+                    res.end(JSON.stringify({
+                        error: 'Too Many Requests',
+                        message: `Rate limit exceeded. Try again after ${new Date(rateLimit.resetAt).toISOString()}`,
+                        retryAfter: rateLimit.resetAt
+                    }));
                     return;
                 }
 
                 console.log(`[Shim] 🔌 Connect request: user ${userId} -> server ${serverId}`);
 
                 // Disconnect any currently active server for this user
-                const currentActiveServer = activeServerByUser.get(userId);
+                const currentActiveServer = await stateManager.getActiveServer(userId);
                 if (currentActiveServer && currentActiveServer !== serverId) {
                     console.log(`[Shim] 🔄 Disconnecting previous server ${currentActiveServer} for user ${userId}`);
                     rustPlusManager.disconnectServer(currentActiveServer);
                 }
 
                 // Update active server tracking
-                activeServerByUser.set(userId, serverId);
+                await stateManager.setActiveServer(userId, serverId);
 
                 // Update activity timestamp
-                userActivity.set(userId, Date.now());
+                await stateManager.setUserActivity(userId, Date.now());
 
                 // Fetch server info and connect
                 const { data: server, error } = await supabase
@@ -487,6 +694,13 @@ const server = http.createServer(async (req, res) => {
                 // Connect to the server
                 await rustPlusManager.connectToServer(serverId, server);
 
+                // Add server to user's subscription list
+                const clientData = sseClients.get(userId);
+                if (clientData) {
+                    clientData.subscriptions.add(serverId);
+                    console.log(`[Shim] ✅ User ${userId} subscribed to server ${serverId}`);
+                }
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true }));
             } catch (error) {
@@ -502,18 +716,42 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/heartbeat') {
         let body = '';
         req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        req.on('end', async () => {
             try {
-                const { userId } = JSON.parse(body);
+                const { userId: rawUserId } = JSON.parse(body);
+
+                // Validate input
+                const userId = validateUserId(rawUserId);
 
                 if (!userId) {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: 'Missing userId' }));
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid or missing userId' }));
+                    return;
+                }
+
+                // Rate limiting: 120 requests/minute per user (heartbeat is frequent)
+                const rateLimit = await rateLimiter.checkLimit('heartbeat', userId, 120, 60000);
+                res.setHeader('X-RateLimit-Limit', '120');
+                res.setHeader('X-RateLimit-Remaining', rateLimit.remaining);
+                res.setHeader('X-RateLimit-Reset', rateLimit.resetAt);
+
+                if (!rateLimit.allowed) {
+                    console.warn(`[RateLimiter] Rate limit exceeded for heartbeat:${userId}`);
+                    res.writeHead(429, {
+                        'Content-Type': 'application/json',
+                        'Retry-After': Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+                    });
+                    res.end(JSON.stringify({
+                        error: 'Too Many Requests',
+                        message: `Rate limit exceeded. Try again after ${new Date(rateLimit.resetAt).toISOString()}`,
+                        retryAfter: rateLimit.resetAt
+                    }));
                     return;
                 }
 
                 // Only track activity if user has an active server
-                if (!activeServerByUser.has(userId)) {
+                const hasActiveServer = await stateManager.getActiveServer(userId);
+                if (!hasActiveServer) {
                     // No active server, ignore heartbeat
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ success: true, ignored: true }));
@@ -521,7 +759,7 @@ const server = http.createServer(async (req, res) => {
                 }
 
                 // Update activity timestamp
-                userActivity.set(userId, Date.now());
+                await stateManager.setUserActivity(userId, Date.now());
 
                 // Cancel any active countdown
                 if (countdownTimers.has(userId)) {
@@ -530,9 +768,9 @@ const server = http.createServer(async (req, res) => {
                     console.log(`[Activity] ✅ Countdown cancelled for user ${userId} - activity detected`);
 
                     // Notify frontend to stop countdown
-                    const client = sseClients.get(userId);
-                    if (client) {
-                        sendSSE(client, 'countdown_cancelled', {});
+                    const clientData = sseClients.get(userId);
+                    if (clientData) {
+                        sendSSE(clientData.res, 'countdown_cancelled', {}, userId);
                     }
                 }
 
@@ -598,10 +836,52 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // Health check
+    // Health check endpoint
     if (req.method === 'GET' && req.url === '/health') {
-        res.writeHead(200);
-        res.end('OK');
+        try {
+            const health = {
+                status: 'healthy',
+                timestamp: new Date().toISOString(),
+                uptime: process.uptime(),
+                components: {
+                    redis: stateManager.getHealthStatus(),
+                    rateLimiter: rateLimiter.getHealthStatus(),
+                    sse: {
+                        connectedClients: sseClients.size,
+                        activeCountdowns: countdownTimers.size
+                    },
+                    rustplus: {
+                        activeConnections: rustPlusManager.getConnectionCount()
+                    },
+                    queue: {
+                        healthy: queueManager.isHealthy(),
+                        stats: await queueManager.getAllStats()
+                    }
+                },
+                memory: {
+                    rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+                    heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+                    heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024)
+                }
+            };
+
+            // Check if any critical component is unhealthy
+            if (!health.components.redis.healthy && health.components.redis.redis) {
+                health.status = 'degraded';
+                health.issues = ['Redis connection unhealthy'];
+            }
+
+            const statusCode = health.status === 'healthy' ? 200 : 503;
+            res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(health, null, 2));
+        } catch (error) {
+            logger.error('Health', 'Error generating health check', { error: error.message });
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                status: 'error',
+                error: 'Failed to generate health check'
+            }));
+        }
         return;
     }
 
@@ -612,20 +892,40 @@ const server = http.createServer(async (req, res) => {
 
 // Setup RustPlusManager to forward events to SSE clients
 rustPlusManager.setSSECallback(({ serverId, type, data }) => {
-    // Broadcast to all connected clients
-    // In production, you'd filter by which users have access to this server
-    for (const [userId, client] of sseClients.entries()) {
-        sendSSE(client, type, { serverId, ...data });
+    // Send event only to clients subscribed to this server
+    for (const [userId, clientData] of sseClients.entries()) {
+        // Check if this user is subscribed to this server
+        if (clientData.subscriptions.has(serverId)) {
+            sendSSE(clientData.res, type, { serverId, ...data }, userId);
+        }
     }
 });
 
-// Helper function to send SSE events
-function sendSSE(res, event, data) {
+// Helper function to send SSE events with backpressure handling
+function sendSSE(res, event, data, userId = null) {
     try {
-        res.write(`event: ${event}\n`);
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+        const canWrite = res.write(message);
+
+        if (!canWrite) {
+            console.warn(`[SSE] Backpressure detected on event: ${event}`);
+        }
+
+        // Update lastWrite timestamp for this client
+        if (userId && sseClients.has(userId)) {
+            sseClients.get(userId).lastWrite = Date.now();
+        } else {
+            // Fallback: search for the client (less efficient but works for existing code)
+            for (const clientData of sseClients.values()) {
+                if (clientData.res === res) {
+                    clientData.lastWrite = Date.now();
+                    break;
+                }
+            }
+        }
     } catch (error) {
         console.error('[SSE] Error sending event:', error);
+        // Mark this connection as potentially dead - watchdog will clean it up
     }
 }
 
@@ -698,77 +998,59 @@ async function executeWorkflowAction(serverId, action) {
     }
 }
 
-// Inactivity Checker - Runs every 10 seconds
-setInterval(() => {
-    const now = Date.now();
-    const INACTIVITY_THRESHOLD = 10 * 60 * 1000; // 10 minutes
-    const COUNTDOWN_DURATION = 10; // 10 seconds
+// Inactivity Checker - MIGRATED TO PHASE 3
+// NOTE: Inactivity detection is migrated to Redis-backed state in Phase 2
+// This feature will be fully re-implemented in Phase 3 using BullMQ job queue
+// for proper async handling of Redis operations and countdown intervals
+// Activity tracking continues to work via the /heartbeat endpoint
 
-    for (const [userId, lastActivity] of userActivity.entries()) {
-        const timeSinceActivity = now - lastActivity;
+server.listen(PORT, async () => {
+    logger.info('Shim', `Cloud Shim running on port ${PORT}`);
 
-        // Check if user has been inactive for 10 minutes
-        if (timeSinceActivity >= INACTIVITY_THRESHOLD) {
-            // Skip if countdown already running
-            if (countdownTimers.has(userId)) {
-                continue;
-            }
-
-            console.log(`[Activity] ⏰ Starting inactivity countdown for user ${userId}`);
-
-            let countdown = COUNTDOWN_DURATION;
-
-            // Send initial countdown event
-            const client = sseClients.get(userId);
-            if (client) {
-                sendSSE(client, 'inactivity_countdown', { secondsRemaining: countdown });
-            }
-
-            // Start countdown interval
-            const countdownInterval = setInterval(() => {
-                countdown--;
-
-                if (countdown > 0) {
-                    // Send countdown update
-                    const client = sseClients.get(userId);
-                    if (client) {
-                        sendSSE(client, 'inactivity_countdown', { secondsRemaining: countdown });
-                    }
-                } else {
-                    // Countdown finished - disconnect active server
-                    clearInterval(countdownInterval);
-                    countdownTimers.delete(userId);
-
-                    const serverId = activeServerByUser.get(userId);
-                    if (serverId) {
-                        console.log(`[Activity] 💤 Disconnecting server ${serverId} due to inactivity for user ${userId}`);
-                        rustPlusManager.disconnectServer(serverId);
-                        activeServerByUser.delete(userId);
-
-                        // Notify frontend
-                        const client = sseClients.get(userId);
-                        if (client) {
-                            sendSSE(client, 'disconnected_by_inactivity', {
-                                serverId,
-                                reason: 'No activity detected for 1 minute'
-                            });
-                        }
-                    }
-
-                    // Clean up activity tracking
-                    userActivity.delete(userId);
-                }
-            }, 1000); // Update every second
-
-            countdownTimers.set(userId, countdownInterval);
-        }
+    // Initialize Redis state manager
+    try {
+        await stateManager.initialize();
+        const health = stateManager.getHealthStatus();
+        logger.info('Shim', `State storage: ${health.mode} (${health.healthy ? 'healthy' : 'unhealthy'})`);
+    } catch (error) {
+        logger.error('Shim', 'Failed to initialize state manager', { error: error.message });
+        logger.warn('Shim', 'Falling back to in-memory state storage');
     }
-}, 10000); // Check every 10 seconds
 
-server.listen(PORT, () => {
-    console.log(`[Shim] Cloud Shim running on port ${PORT}`);
-    console.log(`[Shim] SSE endpoint: http://localhost:${PORT}/events/:userId`);
-    console.log(`[Shim] Command endpoint: http://localhost:${PORT}/command`);
-    console.log(`[Shim] Heartbeat endpoint: http://localhost:${PORT}/heartbeat`);
-    console.log(`[Shim] Connect endpoint: http://localhost:${PORT}/connect-server`);
+    // Initialize rate limiter
+    rateLimiter.initialize();
+    const rateLimitHealth = rateLimiter.getHealthStatus();
+    logger.info('Shim', `Rate limiting: ${rateLimitHealth.mode}`);
+
+    // Initialize queue manager and workers
+    try {
+        await queueManager.initialize();
+        logger.info('Shim', 'Queue manager initialized');
+
+        // Create worker for rustplus jobs
+        queueManager.createWorker('rustplus', processJob, {
+            concurrency: 10 // Process up to 10 jobs concurrently
+        });
+
+        // Create scheduler for delayed/repeated jobs
+        queueManager.createScheduler('rustplus');
+
+        // Schedule inactivity check job (every 5 minutes)
+        await queueManager.scheduleRepeatingJob('rustplus', 'inactivity-check', {}, {
+            pattern: '*/5 * * * *' // Cron: every 5 minutes
+        });
+
+        logger.info('Shim', 'Job workers and schedulers initialized');
+    } catch (error) {
+        logger.error('Shim', 'Failed to initialize queue manager', { error: error.message });
+    }
+
+    // Set queue manager reference in rustPlusManager for job scheduling
+    rustPlusManager.setQueueManager(queueManager);
+
+    // Log available endpoints
+    logger.info('Shim', `SSE endpoint: http://localhost:${PORT}/events/:userId`);
+    logger.info('Shim', `Command endpoint: http://localhost:${PORT}/command (rate limit: 60/min)`);
+    logger.info('Shim', `Heartbeat endpoint: http://localhost:${PORT}/heartbeat (rate limit: 120/min)`);
+    logger.info('Shim', `Connect endpoint: http://localhost:${PORT}/connect-server (rate limit: 10/min)`);
 });

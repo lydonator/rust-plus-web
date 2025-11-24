@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { useShim } from '@/hooks/useShim';
+import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 import SmartSwitch from '@/components/devices/SmartSwitch';
 import Alarm from '@/components/devices/Alarm';
 import StorageMonitor from '@/components/devices/StorageMonitor';
@@ -146,6 +147,8 @@ function DraggableDeviceChip({
 }
 
 export default function DevicesPage() {
+    useShimConnectionGuard();
+
     const params = useParams();
     const serverId = params.serverId as string;
     const [devices, setDevices] = useState<SmartDevice[]>([]);

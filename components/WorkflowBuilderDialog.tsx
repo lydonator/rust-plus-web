@@ -517,17 +517,24 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                         )}
 
                                         {action.action_type === 'notify' && (
-                                            <div className="text-sm text-zinc-400 bg-zinc-900 p-3 rounded border border-zinc-700">
-                                                <p className="mb-1">📢 Sends a team chat notification</p>
-                                                {triggerType === 'alarm' ? (
-                                                    <p className="text-xs text-zinc-500">
-                                                        Message will be: "Smart Alarm: [alarm name]"
-                                                    </p>
-                                                ) : (
-                                                    <p className="text-xs text-zinc-500">
-                                                        Custom messages coming soon for manual workflows
-                                                    </p>
-                                                )}
+                                            <div className="space-y-2">
+                                                <label className="block text-xs text-zinc-400">
+                                                    Notification Message
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={action.action_config.message || ''}
+                                                    onChange={(e) =>
+                                                        updateAction(index, {
+                                                            message: e.target.value
+                                                        })
+                                                    }
+                                                    placeholder="Enter your custom message..."
+                                                    className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-white text-sm placeholder-zinc-500 focus:outline-none focus:border-rust-500"
+                                                />
+                                                <p className="text-xs text-zinc-500">
+                                                    This message will be sent to team chat when the workflow runs
+                                                </p>
                                             </div>
                                         )}
                                     </div>

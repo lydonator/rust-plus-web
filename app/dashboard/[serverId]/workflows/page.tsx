@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Play, Trash2, Plus, Power, PowerOff, Edit } from 'lucide-react';
 import WorkflowBuilderDialog from '@/components/WorkflowBuilderDialog';
+import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 
 interface WorkflowAction {
     id: string;
@@ -24,6 +25,8 @@ interface Workflow {
 }
 
 export default function WorkflowsPage() {
+    useShimConnectionGuard();
+
     const params = useParams();
     const serverId = params.serverId as string;
 

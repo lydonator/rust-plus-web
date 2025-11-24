@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Rust+ Web Companion Bridge",
+  "version": "1.0.0",
+  "description": "Local bridge for Rust+ Web Companion to communicate with Facepunch APIs",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://companion-rust.facepunch.com/*",
+    "https://fcm.googleapis.com/*",
+    "https://android.googleapis.com/*",
+    "https://fcmregistrations.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://app.rustplus.online/*",
+      "http://localhost:3000/*"
+    ]
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

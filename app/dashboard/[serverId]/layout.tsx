@@ -66,8 +66,7 @@ export default function ServerDashboardLayout({
         { name: 'Map', href: `/dashboard/${serverId}/map`, icon: MapIcon },
         { name: 'Devices', href: `/dashboard/${serverId}/devices`, icon: Zap },
         { name: 'Workflows', href: `/dashboard/${serverId}/workflows`, icon: Workflow },
-        { name: 'Chat', href: `/dashboard/${serverId}/chat`, icon: MessageSquare },
-        { name: 'Shops', href: `/dashboard/${serverId}/shops`, icon: ShoppingCart },
+        { name: 'Market', href: `/dashboard/${serverId}/market`, icon: ShoppingCart },
     ];
 
     return (

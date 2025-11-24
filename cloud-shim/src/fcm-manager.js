@@ -3,14 +3,15 @@ const { createClient } = require('@supabase/supabase-js');
 const AndroidFCM = require('@liamcottle/push-receiver/src/android/fcm');
 const PushReceiverClient = require('@liamcottle/push-receiver/src/client');
 const axios = require('axios');
+const config = require('./config');
 
-// Constants from rustplus.js CLI
-const API_KEY = "AIzaSyB5y2y-Tzqb4-I4Qnlsh_9naYv_TD8pCvY";
-const PROJECT_ID = "rust-companion-app";
-const GCM_SENDER_ID = "976529667804";
-const GMS_APP_ID = "1:976529667804:android:d6f1ddeb4403b338fea619";
-const ANDROID_PACKAGE_NAME = "com.facepunch.rust.companion";
-const ANDROID_PACKAGE_CERT = "E28D05345FB78A7A1A63D70F4A302DBF426CA5AD";
+// Constants from config (Rust+ companion app public constants)
+const API_KEY = config.RUSTPLUS_API_KEY;
+const PROJECT_ID = config.RUSTPLUS_PROJECT_ID;
+const GCM_SENDER_ID = config.RUSTPLUS_SENDER_ID;
+const GMS_APP_ID = config.RUSTPLUS_GMS_APP_ID;
+const ANDROID_PACKAGE_NAME = config.RUSTPLUS_ANDROID_PACKAGE;
+const ANDROID_PACKAGE_CERT = config.RUSTPLUS_ANDROID_CERT;
 
 class FcmManager {
     constructor() {

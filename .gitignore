@@ -47,3 +47,5 @@ cloud-shim/.env.production
 *.tsbuildinfo
 next-env.d.ts
 node_modules
+
+NUL

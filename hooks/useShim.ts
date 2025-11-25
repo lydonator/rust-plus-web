@@ -30,6 +30,7 @@ export function useShim(userId: string | null) {
         const handleFcmStatus = (e: Event) => {
             const event = e as CustomEvent;
             console.log('[Shim] FCM Status:', event.detail);
+            console.log('[Shim] 🟢 Setting isConnected to TRUE via FCM status');
             setIsConnected(true);
             if (event.detail.fcmToken) setFcmToken(event.detail.fcmToken);
         };

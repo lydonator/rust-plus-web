@@ -2,10 +2,14 @@ import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import jwt from 'jsonwebtoken';
 
-// Shared authentication logic
-async function handleAuth(steamId: string, authToken: string) {
-    if (!steamId || !authToken) {
-        throw new Error('Missing steamId or authToken');
+export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+
+    // Get the auth token from Facepunch callback
+    const authToken = searchParams.get('token') || searchParams.get('authToken');
+
+    if (!authToken) {
+        return NextResponse.json({ error: 'No auth token received from Facepunch' }, { status: 400 });
     }
 
     try {
@@ -14,6 +18,7 @@ async function handleAuth(steamId: string, authToken: string) {
         console.log('Decoded token:', decodedToken);
 
         // The token is in format: base64(payload).base64(signature)
+        // We only need the payload part
         const parts = decodedToken.split('.');
         if (parts.length < 2) {
             throw new Error('Invalid token format - expected JWT with payload and signature');
@@ -25,6 +30,14 @@ async function handleAuth(steamId: string, authToken: string) {
         const decoded = JSON.parse(payloadJson);
 
         console.log('Decoded JWT payload:', decoded);
+
+        // The token might have steamId directly or in 'sub' field
+        const steamId = decoded.steamId || decoded.sub || decoded.SteamId;
+
+        if (!steamId) {
+            throw new Error('No Steam ID found in token');
+        }
+
         console.log('Extracted Steam ID:', steamId);
 
         // Find or create user in Supabase
@@ -52,7 +65,6 @@ async function handleAuth(steamId: string, authToken: string) {
                 throw new Error('Failed to create user');
             }
             userId = newUser.id;
-            console.log('Created new user:', userId);
         } else {
             // Update existing user with new auth token
             const { error: updateError } = await supabaseAdmin
@@ -64,7 +76,6 @@ async function handleAuth(steamId: string, authToken: string) {
                 console.error('Error updating user:', updateError);
             }
             userId = existingUser.id;
-            console.log('Updated existing user:', userId);
         }
 
         // Create JWT for our web app
@@ -74,30 +85,8 @@ async function handleAuth(steamId: string, authToken: string) {
             { expiresIn: '7d' }
         );
 
-        return { token, userId, steamId };
-
-    } catch (error: any) {
-        console.error('Auth error:', error);
-        throw error;
-    }
-}
-
-// GET handler - for traditional Steam callback (query params)
-export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url);
-
-    const authToken = searchParams.get('token') || searchParams.get('authToken');
-    const steamId = searchParams.get('steamId');
-
-    if (!authToken || !steamId) {
-        return NextResponse.json({ error: 'No auth token or steamId received' }, { status: 400 });
-    }
-
-    try {
-        const { token } = await handleAuth(steamId, authToken);
-
         // Redirect to Dashboard
-        const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/dashboard`);
+        const response = NextResponse.redirect(`${process.env.STEAM_REALM}/dashboard`);
 
         response.cookies.set('auth-token', token, {
             httpOnly: true,
@@ -109,48 +98,6 @@ export async function GET(request: Request) {
 
     } catch (error: any) {
         console.error('Auth callback error:', error);
-        return NextResponse.json({
-            error: 'Authentication failed',
-            details: error.message
-        }, { status: 500 });
-    }
-}
-
-// POST handler - for extension callback (JSON body)
-export async function POST(request: Request) {
-    try {
-        const body = await request.json();
-        const { steamId, token: authToken } = body;
-
-        if (!authToken || !steamId) {
-            return NextResponse.json({
-                error: 'Missing steamId or token in request body'
-            }, { status: 400 });
-        }
-
-        console.log('[Auth POST] Received auth callback from extension:', { steamId });
-
-        const { token } = await handleAuth(steamId, authToken);
-
-        // Return the auth token so the extension can set it or redirect
-        const response = NextResponse.json({
-            success: true,
-            message: 'Authentication successful',
-            token,
-            redirectUrl: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`
-        });
-
-        // Set the auth cookie
-        response.cookies.set('auth-token', token, {
-            httpOnly: true,
-            path: '/',
-            maxAge: 60 * 60 * 24 * 7, // 7 days
-        });
-
-        return response;
-
-    } catch (error: any) {
-        console.error('Auth POST error:', error);
         return NextResponse.json({
             error: 'Authentication failed',
             details: error.message

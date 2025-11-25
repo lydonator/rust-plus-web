@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function AuthCompletePage() {
+function AuthCompleteContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [status, setStatus] = useState('Completing registration...');
@@ -56,5 +56,17 @@ export default function AuthCompletePage() {
                 </p>
             </div>
         </div>
+    );
+}
+
+export default function AuthCompletePage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen flex items-center justify-center bg-gray-900">
+                <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+            </div>
+        }>
+            <AuthCompleteContent />
+        </Suspense>
     );
 }

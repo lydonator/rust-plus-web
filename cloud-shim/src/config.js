@@ -4,7 +4,7 @@ require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' 
 
 
 module.exports = {
-    PORT: process.env.SHIM_PORT || 4000,
+    PORT: process.env.SHIM_PORT || 4001,
     SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
 

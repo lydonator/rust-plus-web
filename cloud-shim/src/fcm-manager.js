@@ -100,7 +100,10 @@ class FcmManager {
             listener.onNotification = onNotification;
             listener.onDevicePaired = onDevicePaired;
             listener.onServerPaired = onServerPaired;
-            return;
+
+            // Return existing credentials so SSE can send fcm_status event on reconnect
+            const credentials = await this.getOrRegisterCredentials(userId);
+            return credentials;
         }
 
         try {
@@ -362,16 +365,24 @@ class FcmManager {
                             console.log('[FCM] ✅ Device saved:', deviceData);
 
                             // Trigger onDevicePaired callback
+                            console.log('[FCM] 🔍 Checking for onDevicePaired callback, userId:', userId);
+                            console.log('[FCM] 🔍 activeListeners.has(userId):', this.activeListeners.has(userId));
                             if (this.activeListeners.has(userId)) {
                                 const { onDevicePaired } = this.activeListeners.get(userId);
+                                console.log('[FCM] 🔍 onDevicePaired exists:', !!onDevicePaired);
                                 if (onDevicePaired) {
+                                    console.log('[FCM] 🚀 Calling onDevicePaired callback for serverId:', server.id, 'entityId:', deviceData.entity_id);
                                     onDevicePaired({
                                         type: 'device_paired',
                                         serverId: server.id,
                                         entityId: deviceData.entity_id,
                                         deviceData
                                     });
+                                } else {
+                                    console.error('[FCM] ❌ onDevicePaired callback is undefined/null');
                                 }
+                            } else {
+                                console.error('[FCM] ❌ No active listener found for userId:', userId);
                             }
                         }
                     } else {

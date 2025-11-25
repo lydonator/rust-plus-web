@@ -61,7 +61,7 @@ const sseClients = new Map();
 const disconnectTimeouts = new Map();
 
 // SSE Watchdog: Monitor for hung/dead sockets
-const SSE_TIMEOUT_MS = 60000; // 60 seconds
+const SSE_TIMEOUT_MS = 300000; // 5 minutes (increased from 60s to prevent premature disconnects)
 setInterval(() => {
     const now = Date.now();
     for (const [userId, clientData] of sseClients.entries()) {
@@ -175,7 +175,9 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': origin || 'https://app.rustplus.online',
+            'Access-Control-Allow-Credentials': 'true'
         });
 
         // Check if there's already a connection for this user
@@ -202,7 +204,7 @@ const server = http.createServer(async (req, res) => {
         });
 
         // Send initial connection event
-        sendSSE(res, 'connected', { userId, timestamp: Date.now() });
+        sendSSE(res, 'connected', { userId, timestamp: Date.now() }, userId);
 
         try {
             // Start FCM Listener for this user
@@ -221,7 +223,7 @@ const server = http.createServer(async (req, res) => {
                     );
 
                     // Notify client to refresh device list
-                    sendSSE(res, 'device_paired', {
+                    sendSSE(res, 'device_list_changed', {
                         serverId: devicePairingResult.serverId,
                         entityId: devicePairingResult.entityId
                     });
@@ -261,19 +263,38 @@ const server = http.createServer(async (req, res) => {
                 sendSSE(res, 'fcm_status', {
                     connected: true,
                     fcmToken: credentials.fcm.token
-                });
+                }, userId);
             } else {
-                sendSSE(res, 'fcm_status', { connected: true });
+                sendSSE(res, 'fcm_status', { connected: true }, userId);
             }
 
         } catch (error) {
-            console.error(`[SSE] Error initializing for ${userId}:`, error);
-            sendSSE(res, 'error', { message: 'Failed to initialize' });
+            console.error(`[SSE] ❌❌❌ Error initializing for ${userId}:`, error);
+            console.error(`[SSE] Error stack:`, error.stack);
+            console.error(`[SSE] Error name:`, error.name);
+            console.error(`[SSE] Error message:`, error.message);
+            try {
+                sendSSE(res, 'error', { message: 'Failed to initialize', error: error.message }, userId);
+            } catch (sendError) {
+                console.error(`[SSE] Failed to send error event:`, sendError);
+            }
         }
+
+        // Send heartbeat every 30 seconds to keep connection alive
+        const heartbeatInterval = setInterval(() => {
+            try {
+                // Send SSE comment (not an event, just a comment to keep connection alive)
+                res.write(': heartbeat\n\n');
+            } catch (error) {
+                console.error(`[SSE] Heartbeat failed for ${userId}:`, error);
+                clearInterval(heartbeatInterval);
+            }
+        }, 30000); // 30 seconds
 
         // Handle client disconnect
         req.on('close', () => {
             console.log(`[SSE] Client disconnected: ${userId}`);
+            clearInterval(heartbeatInterval); // Stop heartbeat
             sseClients.delete(userId);
 
             // Implement grace period - don't immediately tear down FCM listener
@@ -507,7 +528,8 @@ const server = http.createServer(async (req, res) => {
                     case 'getServerInfo':
                         rustPlusManager.getServerInfo(serverId, async (message) => {
                             if (!message) {
-                                res.status(503).json({ error: 'Server not connected' });
+                                res.writeHead(503, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ error: 'Server not connected' }));
                                 return;
                             }
                             if (message.response && message.response.info) {

@@ -15,6 +15,7 @@ class ShimSSEManager {
         fcm_status: this.handleHanSolo.bind(this),
         notification: this.handlePrincessLeia.bind(this),
         device_paired: this.handleChewbacca.bind(this),
+        device_list_changed: this.handleJawas.bind(this),
         device_deleted: this.handleDarthVader.bind(this),
         entity: this.handleYoda.bind(this),
         connection_status: this.handleObiWan.bind(this),
@@ -56,6 +57,12 @@ class ShimSSEManager {
         const data = JSON.parse(event.data);
         console.log('[ShimSSE] Device Paired:', data);
         window.dispatchEvent(new CustomEvent('device_paired', { detail: data }));
+    }
+
+    private handleJawas(event: any) {
+        const data = JSON.parse(event.data);
+        console.log('[ShimSSE] Device List Changed:', data);
+        window.dispatchEvent(new CustomEvent('device_list_changed', { detail: data }));
     }
 
     private handleDarthVader(event: any) {
@@ -181,6 +188,7 @@ class ShimSSEManager {
         this.eventSource.addEventListener('fcm_status', this.handlers.fcm_status);
         this.eventSource.addEventListener('notification', this.handlers.notification);
         this.eventSource.addEventListener('device_paired', this.handlers.device_paired);
+        this.eventSource.addEventListener('device_list_changed', this.handlers.device_list_changed);
         this.eventSource.addEventListener('device_deleted', this.handlers.device_deleted);
         this.eventSource.addEventListener('entity', this.handlers.entity);
         this.eventSource.addEventListener('connection_status', this.handlers.connection_status);
@@ -208,6 +216,7 @@ class ShimSSEManager {
         this.eventSource.removeEventListener('fcm_status', this.handlers.fcm_status);
         this.eventSource.removeEventListener('notification', this.handlers.notification);
         this.eventSource.removeEventListener('device_paired', this.handlers.device_paired);
+        this.eventSource.removeEventListener('device_list_changed', this.handlers.device_list_changed);
         this.eventSource.removeEventListener('device_deleted', this.handlers.device_deleted);
         this.eventSource.removeEventListener('entity', this.handlers.entity);
         this.eventSource.removeEventListener('connection_status', this.handlers.connection_status);

@@ -332,7 +332,8 @@ export default function Dashboard() {
                             const CardWrapper = isConnected ? Link : 'div';
                             const cardProps = isConnected
                                 ? { href: `/dashboard/${server.id}` }
-                                : {};
+                                : { href: '#' as any };
+
 
                             return (
                                 <CardWrapper
@@ -351,79 +352,79 @@ export default function Dashboard() {
                                             </h3>
                                             <p className="text-sm text-zinc-400">{server.ip}:{server.port}</p>
                                         </div>
-                                    <div className="flex gap-2 items-center">
-                                        {/* Connect/Disconnect Toggle */}
-                                        {activeServerId === server.id ? (
+                                        <div className="flex gap-2 items-center">
+                                            {/* Connect/Disconnect Toggle */}
+                                            {activeServerId === server.id ? (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        handleDisconnectServer(server.id);
+                                                    }}
+                                                    className="px-3 py-1 bg-green-900 hover:bg-green-800 text-green-200 text-xs rounded transition-colors flex items-center gap-1"
+                                                    title="Click to disconnect"
+                                                >
+                                                    <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+                                                    Connected
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        handleConnectServer(server.id);
+                                                    }}
+                                                    disabled={connectingServerId === server.id}
+                                                    className="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    title="Click to connect"
+                                                >
+                                                    {connectingServerId === server.id ? 'Connecting...' : 'Connect'}
+                                                </button>
+                                            )}
+
+                                            {/* Delete Button */}
                                             <button
                                                 onClick={(e) => {
                                                     e.preventDefault();
                                                     e.stopPropagation();
-                                                    handleDisconnectServer(server.id);
+                                                    setDeleteConfirm({
+                                                        serverId: server.id,
+                                                        serverName: server.server_info?.name || server.name
+                                                    });
                                                 }}
-                                                className="px-3 py-1 bg-green-900 hover:bg-green-800 text-green-200 text-xs rounded transition-colors flex items-center gap-1"
-                                                title="Click to disconnect"
+                                                className="p-2 hover:bg-red-900/50 text-zinc-400 hover:text-red-500 rounded transition-colors"
+                                                title="Remove Server"
                                             >
-                                                <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-                                                Connected
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M3 6h18"></path>
+                                                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                                                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                                                </svg>
                                             </button>
-                                        ) : (
-                                            <button
-                                                onClick={(e) => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                    handleConnectServer(server.id);
-                                                }}
-                                                disabled={connectingServerId === server.id}
-                                                className="px-3 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                                title="Click to connect"
-                                            >
-                                                {connectingServerId === server.id ? 'Connecting...' : 'Connect'}
-                                            </button>
-                                        )}
-
-                                        {/* Delete Button */}
-                                        <button
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                setDeleteConfirm({
-                                                    serverId: server.id,
-                                                    serverName: server.server_info?.name || server.name
-                                                });
-                                            }}
-                                            className="p-2 hover:bg-red-900/50 text-zinc-400 hover:text-red-500 rounded transition-colors"
-                                            title="Remove Server"
-                                        >
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M3 6h18"></path>
-                                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
-                                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
-                                            </svg>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {server.server_info && (
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                        <div className="bg-zinc-900 p-2 rounded">
-                                            <span className="text-zinc-500 block">Players</span>
-                                            <span className="font-mono">{server.server_info.players}/{server.server_info.max_players}</span>
-                                        </div>
-                                        <div className="bg-zinc-900 p-2 rounded">
-                                            <span className="text-zinc-500 block">Map</span>
-                                            <span className="block truncate overflow-hidden text-ellipsis" title={`${server.server_info.map} (${server.server_info.map_size})`}>{server.server_info.map} ({server.server_info.map_size})</span>
-                                        </div>
-                                        <div className="bg-zinc-900 p-2 rounded">
-                                            <span className="text-zinc-500 block">Queued</span>
-                                            <span>{server.server_info.queued_players}</span>
-                                        </div>
-                                        <div className="bg-zinc-900 p-2 rounded">
-                                            <span className="text-zinc-500 block">Wipe</span>
-                                            <span>{new Date(server.server_info.wipe_time).toLocaleDateString()}</span>
                                         </div>
                                     </div>
-                                )}
-                            </CardWrapper>
+
+                                    {server.server_info && (
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                            <div className="bg-zinc-900 p-2 rounded">
+                                                <span className="text-zinc-500 block">Players</span>
+                                                <span className="font-mono">{server.server_info.players}/{server.server_info.max_players}</span>
+                                            </div>
+                                            <div className="bg-zinc-900 p-2 rounded">
+                                                <span className="text-zinc-500 block">Map</span>
+                                                <span className="block truncate overflow-hidden text-ellipsis" title={`${server.server_info.map} (${server.server_info.map_size})`}>{server.server_info.map} ({server.server_info.map_size})</span>
+                                            </div>
+                                            <div className="bg-zinc-900 p-2 rounded">
+                                                <span className="text-zinc-500 block">Queued</span>
+                                                <span>{server.server_info.queued_players}</span>
+                                            </div>
+                                            <div className="bg-zinc-900 p-2 rounded">
+                                                <span className="text-zinc-500 block">Wipe</span>
+                                                <span>{new Date(server.server_info.wipe_time).toLocaleDateString()}</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                </CardWrapper>
                             );
                         })}
                     </div>

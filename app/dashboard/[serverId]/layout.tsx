@@ -10,7 +10,6 @@ import {
     Zap,
     MessageSquare,
     ShoppingCart,
-    Settings,
     ArrowLeft,
     Workflow
 } from 'lucide-react';
@@ -41,10 +40,8 @@ export default function ServerDashboardLayout({
     // Track last viewed time
     useEffect(() => {
         if (serverId) {
-            fetch('/api/servers', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: serverId, action: 'view' })
+            fetch(`/api/servers/${serverId}/view`, {
+                method: 'POST',
             }).catch(err => console.error('Failed to update view time:', err));
         }
     }, [serverId]);
@@ -101,16 +98,6 @@ export default function ServerDashboardLayout({
                         );
                     })}
                 </nav>
-
-                <div className="p-4 border-t border-neutral-800">
-                    <Link
-                        href={`/dashboard/${serverId}/settings`}
-                        className="flex items-center px-4 py-3 rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
-                    >
-                        <Settings className="w-5 h-5 mr-3" />
-                        Settings
-                    </Link>
-                </div>
             </aside>
 
             {/* Main Content */}

@@ -207,6 +207,12 @@ class RustPlusManager {
                     this.emitToSSE(serverId, 'team_message', {
                         message: teamMessage.message
                     });
+
+                    // Check for chat-triggered workflows
+                    const messageText = teamMessage.message.message;
+                    if (messageText && messageText.trim().startsWith('!')) {
+                        this.handleChatTrigger(serverId, messageText.trim(), teamMessage.message.name);
+                    }
                 }
 
                 // Emit raw message for debugging
@@ -1233,6 +1239,277 @@ class RustPlusManager {
      */
     getConnectionCount() {
         return this.activeConnections.size;
+    }
+
+    /**
+     * Handle chat-triggered workflows
+     * @param {string} serverId - Server ID
+     * @param {string} message - Chat message (e.g., "!lockdown")
+     * @param {string} senderName - Name of player who sent the message
+     */
+    async handleChatTrigger(serverId, message, senderName) {
+        const command = message.toLowerCase().trim();
+
+        console.log(`[Workflows] 🎯 Chat trigger detected: "${command}" from ${senderName}`);
+
+        // Special restore command
+        if (command === '!restore' || command === '!undo') {
+            await this.restoreLastWorkflowState(serverId, senderName);
+            return;
+        }
+
+        try {
+            // Find workflow by trigger command
+            const { data: workflows, error } = await supabase
+                .from('device_workflows')
+                .select(`
+                    *,
+                    actions:workflow_actions(*)
+                `)
+                .eq('server_id', serverId)
+                .eq('trigger_command', command)
+                .eq('enabled', true)
+                .limit(1);
+
+            if (error) {
+                console.error(`[Workflows] Error fetching workflow:`, error);
+                return;
+            }
+
+            if (!workflows || workflows.length === 0) {
+                console.log(`[Workflows] No workflow found for command: ${command}`);
+                return;
+            }
+
+            const workflow = workflows[0];
+            console.log(`[Workflows] ✅ Found workflow: "${workflow.name}"`);
+
+            // Save current state if workflow has save_state enabled
+            if (workflow.save_state) {
+                await this.captureWorkflowState(serverId, workflow);
+            }
+
+            // Execute workflow actions
+            await this.executeWorkflowActions(serverId, workflow);
+
+        } catch (error) {
+            console.error(`[Workflows] Error handling chat trigger:`, error);
+        }
+    }
+
+    /**
+     * Capture current device states before executing workflow
+     * @param {string} serverId - Server ID
+     * @param {object} workflow - Workflow object
+     */
+    async captureWorkflowState(serverId, workflow) {
+        try {
+            console.log(`[Workflows] 📸 Capturing state for workflow: ${workflow.name}`);
+
+            // Get all devices involved in workflow actions
+            const deviceIds = new Set();
+            for (const action of workflow.actions) {
+                if (action.action_type === 'set_device' && action.action_config.device_id) {
+                    deviceIds.add(action.action_config.device_id);
+                }
+            }
+
+            if (deviceIds.size === 0) {
+                console.log(`[Workflows] No devices to capture state for`);
+                return;
+            }
+
+            // Fetch current device states
+            const { data: devices, error } = await supabase
+                .from('smart_devices')
+                .select('id, entity_id, value')
+                .eq('server_id', serverId)
+                .in('id', Array.from(deviceIds));
+
+            if (error) {
+                console.error(`[Workflows] Error fetching device states:`, error);
+                return;
+            }
+
+            // Build state snapshot
+            const stateData = {
+                devices: {}
+            };
+
+            for (const device of devices) {
+                stateData.devices[device.id] = {
+                    entity_id: device.entity_id,
+                    value: device.value
+                };
+            }
+
+            // Save to database
+            const { error: saveError } = await supabase
+                .from('workflow_states')
+                .insert({
+                    workflow_id: workflow.id,
+                    server_id: serverId,
+                    user_id: workflow.user_id,
+                    state_data: stateData
+                });
+
+            if (saveError) {
+                console.error(`[Workflows] Error saving state:`, saveError);
+            } else {
+                console.log(`[Workflows] ✅ Saved state for ${devices.length} devices`);
+            }
+
+        } catch (error) {
+            console.error(`[Workflows] Error capturing state:`, error);
+        }
+    }
+
+    /**
+     * Execute workflow actions
+     * @param {string} serverId - Server ID
+     * @param {object} workflow - Workflow object with actions
+     */
+    async executeWorkflowActions(serverId, workflow) {
+        console.log(`[Workflows] ⚡ Executing workflow: ${workflow.name}`);
+
+        // Sort actions by action_order
+        const sortedActions = workflow.actions.sort((a, b) => a.action_order - b.action_order);
+
+        for (const action of sortedActions) {
+            try {
+                await this.executeWorkflowAction(serverId, action);
+                // Small delay between actions to avoid overwhelming the server
+                await new Promise(resolve => setTimeout(resolve, 200));
+            } catch (error) {
+                console.error(`[Workflows] Error executing action:`, error);
+            }
+        }
+
+        console.log(`[Workflows] ✅ Completed workflow: ${workflow.name}`);
+    }
+
+    /**
+     * Execute a single workflow action
+     * @param {string} serverId - Server ID
+     * @param {object} action - Action object
+     */
+    async executeWorkflowAction(serverId, action) {
+        switch (action.action_type) {
+            case 'set_device':
+                const { device_id, value } = action.action_config;
+                console.log(`[Workflows] set_device action - device_id: ${device_id}, value: ${value}`);
+
+                // Get device entity_id
+                const { data: device, error: deviceError } = await supabase
+                    .from('smart_devices')
+                    .select('entity_id, name')
+                    .eq('id', device_id)
+                    .single();
+
+                if (deviceError) {
+                    console.error(`[Workflows] Error fetching device ${device_id}:`, deviceError);
+                } else if (device) {
+                    console.log(`[Workflows] Setting ${device.name} (entity ${device.entity_id}) to ${value ? 'ON' : 'OFF'}`);
+                    this.setEntityValue(serverId, device.entity_id, value);
+                } else {
+                    console.warn(`[Workflows] Device ${device_id} not found`);
+                }
+                break;
+
+            case 'set_group':
+                const { group_id, value: groupValue } = action.action_config;
+                console.log(`[Workflows] set_group action - group_id: ${group_id}, value: ${groupValue}`);
+
+                // Get all devices in the group via the junction table
+                const { data: groupMembers, error: groupError } = await supabase
+                    .from('device_group_members')
+                    .select('device_id, smart_devices(entity_id, name)')
+                    .eq('group_id', group_id);
+
+                if (groupError) {
+                    console.error(`[Workflows] Error fetching group ${group_id}:`, groupError);
+                } else if (groupMembers && groupMembers.length > 0) {
+                    console.log(`[Workflows] Setting ${groupMembers.length} devices in group to ${groupValue ? 'ON' : 'OFF'}`);
+                    for (const member of groupMembers) {
+                        const device = member.smart_devices;
+                        if (device) {
+                            this.setEntityValue(serverId, device.entity_id, groupValue);
+                            await new Promise(resolve => setTimeout(resolve, 100)); // Small delay between devices
+                        }
+                    }
+                } else {
+                    console.warn(`[Workflows] No devices found in group ${group_id}`);
+                }
+                break;
+
+            case 'send_message':
+            case 'notify': // Alias for send_message
+                const { message } = action.action_config;
+                console.log(`[Workflows] Sending message: ${message}`);
+                this.sendTeamMessage(serverId, message);
+                break;
+
+
+            case 'delay':
+            case 'wait': // Alias for delay
+                const { duration, duration_ms } = action.action_config;
+                const waitTime = duration || duration_ms || 1000;
+                console.log(`[Workflows] Waiting ${waitTime}ms`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                break;
+
+            default:
+                console.warn(`[Workflows] Unknown action type: ${action.action_type}`);
+        }
+    }
+
+    /**
+     * Restore the last saved workflow state
+     * @param {string} serverId - Server ID
+     * @param {string} senderName - Name of player who triggered restore
+     */
+    async restoreLastWorkflowState(serverId, senderName) {
+        try {
+            console.log(`[Workflows] 🔄 Restoring last state for server ${serverId}`);
+
+            // Get most recent state snapshot
+            const { data: states, error } = await supabase
+                .from('workflow_states')
+                .select('*')
+                .eq('server_id', serverId)
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+            if (error) {
+                console.error(`[Workflows] Error fetching state:`, error);
+                return;
+            }
+
+            if (!states || states.length === 0) {
+                console.log(`[Workflows] No previous state to restore`);
+                return;
+            }
+
+            const lastState = states[0];
+            const devices = lastState.state_data.devices;
+
+            // Restore each device to its previous state
+            let restoredCount = 0;
+            for (const [deviceId, deviceState] of Object.entries(devices)) {
+                try {
+                    this.setEntityValue(serverId, deviceState.entity_id, deviceState.value);
+                    restoredCount++;
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                } catch (error) {
+                    console.error(`[Workflows] Error restoring device ${deviceId}:`, error);
+                }
+            }
+
+            console.log(`[Workflows] ✅ Restored ${restoredCount} devices`);
+
+        } catch (error) {
+            console.error(`[Workflows] Error restoring state:`, error);
+        }
     }
 
 }

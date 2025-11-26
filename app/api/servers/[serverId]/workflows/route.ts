@@ -46,7 +46,7 @@ export async function POST(
         const { serverId } = await params;
         const body = await request.json();
 
-        const { name, description, trigger_type, trigger_config, actions } = body;
+        const { name, description, trigger_type, trigger_config, actions, trigger_command, save_state } = body;
 
         if (!name || typeof name !== 'string' || name.trim().length === 0) {
             return NextResponse.json(
@@ -62,6 +62,23 @@ export async function POST(
             );
         }
 
+        // Validate chat trigger command
+        if (trigger_command) {
+            const trimmedCommand = trigger_command.trim();
+            if (!trimmedCommand.startsWith('!')) {
+                return NextResponse.json(
+                    { error: 'Chat trigger command must start with !' },
+                    { status: 400 }
+                );
+            }
+            if (trimmedCommand.length < 2) {
+                return NextResponse.json(
+                    { error: 'Chat trigger command must be at least 2 characters' },
+                    { status: 400 }
+                );
+            }
+        }
+
         // Create the workflow
         const { data: workflow, error: workflowError } = await supabaseAdmin
             .from('device_workflows')
@@ -71,6 +88,8 @@ export async function POST(
                 description: description?.trim() || null,
                 trigger_type,
                 trigger_config: trigger_config || {},
+                trigger_command: trigger_command?.trim().toLowerCase() || null,
+                save_state: save_state || false,
                 enabled: true
             })
             .select()

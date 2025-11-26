@@ -26,7 +26,7 @@ interface Workflow {
     name: string;
     description: string | null;
     enabled: boolean;
-    trigger_type: 'manual' | 'device_state' | 'time' | 'storage_level' | 'alarm';
+    trigger_type: 'manual' | 'device_state' | 'time' | 'storage_level' | 'alarm' | 'chat';
     trigger_config: any;
     actions?: WorkflowAction[];
 }
@@ -44,6 +44,8 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
     const [description, setDescription] = useState(workflow?.description || '');
     const [triggerType, setTriggerType] = useState<Workflow['trigger_type']>(workflow?.trigger_type || 'manual');
     const [triggerConfig, setTriggerConfig] = useState<any>(workflow?.trigger_config || {});
+    const [triggerCommand, setTriggerCommand] = useState<string>((workflow as any)?.trigger_command || '');
+    const [saveState, setSaveState] = useState<boolean>((workflow as any)?.save_state || false);
     const [actions, setActions] = useState<WorkflowAction[]>([]);
     const [devices, setDevices] = useState<SmartDevice[]>([]);
     const [groups, setGroups] = useState<DeviceGroup[]>([]);
@@ -94,7 +96,7 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
 
         switch (type) {
             case 'set_device':
-                defaultConfig = { entity_id: devices[0]?.entity_id || 0, value: true };
+                defaultConfig = { device_id: devices[0]?.id || '', value: true };
                 break;
             case 'set_group':
                 defaultConfig = { group_id: groups[0]?.id || '', value: true };
@@ -171,6 +173,8 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                     description: description.trim() || null,
                     trigger_type: triggerType,
                     trigger_config: triggerConfig,
+                    trigger_command: triggerCommand.trim() || null,
+                    save_state: saveState,
                     actions: processedActions
                 })
             });
@@ -274,11 +278,17 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                     } else {
                                         setTriggerConfig({});
                                     }
+                                    // Clear chat trigger if switching away from chat
+                                    if (newType !== 'chat') {
+                                        setTriggerCommand('');
+                                        setSaveState(false);
+                                    }
                                 }}
                                 className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-white focus:outline-none focus:border-rust-500"
                             >
                                 <option value="manual">🎯 Manual - Run when I click Execute</option>
                                 <option value="alarm">🔔 Alarm - Run when an alarm is triggered</option>
+                                <option value="chat">💬 Chat - Run when a team member types a command</option>
                             </select>
                         </div>
 
@@ -304,6 +314,46 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                     </select>
                                 )}
                             </div>
+                        )}
+
+                        {/* Chat trigger command - only for chat trigger type */}
+                        {triggerType === 'chat' && (
+                            <>
+                                <div>
+                                    <label className="block text-sm font-medium text-zinc-300 mb-2">
+                                        Chat Command *
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={triggerCommand}
+                                        onChange={(e) => setTriggerCommand(e.target.value)}
+                                        placeholder="!lockdown"
+                                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-white placeholder-zinc-500 focus:outline-none focus:border-rust-500"
+                                    />
+                                    <p className="text-xs text-zinc-500 mt-1">
+                                        Anyone on your team can type this command in team chat to trigger the workflow. Must start with !
+                                    </p>
+                                </div>
+
+                                {/* Save state checkbox */}
+                                <div className="flex items-start gap-3 p-3 bg-zinc-900 border border-zinc-700 rounded">
+                                    <input
+                                        type="checkbox"
+                                        id="save-state"
+                                        checked={saveState}
+                                        onChange={(e) => setSaveState(e.target.checked)}
+                                        className="mt-0.5 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-rust-600 focus:ring-rust-500 focus:ring-offset-0"
+                                    />
+                                    <div className="flex-1">
+                                        <label htmlFor="save-state" className="text-sm font-medium text-zinc-300 cursor-pointer">
+                                            Save state before execution
+                                        </label>
+                                        <p className="text-xs text-zinc-500 mt-1">
+                                            Enables the <code className="px-1 py-0.5 bg-zinc-800 rounded text-rust-400">!restore</code> command to undo this workflow
+                                        </p>
+                                    </div>
+                                </div>
+                            </>
                         )}
                     </div>
 
@@ -394,17 +444,17 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                         {action.action_type === 'set_device' && (
                                             <div className="space-y-2">
                                                 <select
-                                                    value={action.action_config.entity_id}
+                                                    value={action.action_config.device_id}
                                                     onChange={(e) =>
                                                         updateAction(index, {
                                                             ...action.action_config,
-                                                            entity_id: parseInt(e.target.value)
+                                                            device_id: e.target.value
                                                         })
                                                     }
                                                     className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-white text-sm focus:outline-none focus:border-rust-500"
                                                 >
                                                     {devices.map((device) => (
-                                                        <option key={device.id} value={device.entity_id}>
+                                                        <option key={device.id} value={device.id}>
                                                             {device.name} (#{device.entity_id})
                                                         </option>
                                                     ))}
@@ -417,11 +467,10 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                                                 value: true
                                                             })
                                                         }
-                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${
-                                                            action.action_config.value
-                                                                ? 'bg-green-600 text-white'
-                                                                : 'bg-zinc-800 text-zinc-400'
-                                                        }`}
+                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${action.action_config.value
+                                                            ? 'bg-green-600 text-white'
+                                                            : 'bg-zinc-800 text-zinc-400'
+                                                            }`}
                                                     >
                                                         Turn ON
                                                     </button>
@@ -432,11 +481,10 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                                                 value: false
                                                             })
                                                         }
-                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${
-                                                            !action.action_config.value
-                                                                ? 'bg-neutral-600 text-white'
-                                                                : 'bg-zinc-800 text-zinc-400'
-                                                        }`}
+                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${!action.action_config.value
+                                                            ? 'bg-neutral-600 text-white'
+                                                            : 'bg-zinc-800 text-zinc-400'
+                                                            }`}
                                                     >
                                                         Turn OFF
                                                     </button>
@@ -470,11 +518,10 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                                                 value: true
                                                             })
                                                         }
-                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${
-                                                            action.action_config.value
-                                                                ? 'bg-green-600 text-white'
-                                                                : 'bg-zinc-800 text-zinc-400'
-                                                        }`}
+                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${action.action_config.value
+                                                            ? 'bg-green-600 text-white'
+                                                            : 'bg-zinc-800 text-zinc-400'
+                                                            }`}
                                                     >
                                                         Turn ON
                                                     </button>
@@ -485,11 +532,10 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                                                 value: false
                                                             })
                                                         }
-                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${
-                                                            !action.action_config.value
-                                                                ? 'bg-neutral-600 text-white'
-                                                                : 'bg-zinc-800 text-zinc-400'
-                                                        }`}
+                                                        className={`flex-1 px-3 py-2 rounded text-sm transition-colors ${!action.action_config.value
+                                                            ? 'bg-neutral-600 text-white'
+                                                            : 'bg-zinc-800 text-zinc-400'
+                                                            }`}
                                                     >
                                                         Turn OFF
                                                     </button>

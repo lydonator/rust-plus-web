@@ -175,18 +175,24 @@ export default function WorkflowsPage() {
                     {workflows.map((workflow) => (
                         <div
                             key={workflow.id}
-                            className={`p-4 border rounded-lg transition-all ${
-                                workflow.enabled
+                            className={`p-4 border rounded-lg transition-all ${workflow.enabled
                                     ? 'border-zinc-700 bg-zinc-800/50'
                                     : 'border-zinc-800 bg-zinc-900/50 opacity-60'
-                            }`}
+                                }`}
                         >
                             {/* Header */}
                             <div className="flex items-start justify-between mb-3">
                                 <div className="flex-1 min-w-0">
-                                    <h3 className="text-lg font-semibold text-white truncate">
-                                        {workflow.name}
-                                    </h3>
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="text-lg font-semibold text-white truncate">
+                                            {workflow.name}
+                                        </h3>
+                                        {(workflow as any).trigger_command && (
+                                            <span className="text-xs bg-rust-600/20 text-rust-400 px-2 py-0.5 rounded border border-rust-600/30">
+                                                {(workflow as any).trigger_command}
+                                            </span>
+                                        )}
+                                    </div>
                                     {workflow.description && (
                                         <p className="text-sm text-zinc-400 mt-1 line-clamp-2">
                                             {workflow.description}
@@ -195,11 +201,10 @@ export default function WorkflowsPage() {
                                 </div>
                                 <button
                                     onClick={() => handleToggleEnabled(workflow.id, workflow.enabled)}
-                                    className={`ml-2 p-1.5 rounded transition-colors ${
-                                        workflow.enabled
+                                    className={`ml-2 p-1.5 rounded transition-colors ${workflow.enabled
                                             ? 'text-green-500 hover:bg-green-500/10'
                                             : 'text-zinc-500 hover:bg-zinc-700'
-                                    }`}
+                                        }`}
                                     title={workflow.enabled ? 'Enabled' : 'Disabled'}
                                 >
                                     {workflow.enabled ? (

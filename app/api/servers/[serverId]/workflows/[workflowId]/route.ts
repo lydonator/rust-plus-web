@@ -10,7 +10,7 @@ export async function PATCH(
         const { serverId, workflowId } = await params;
         const body = await request.json();
 
-        const { name, description, enabled, trigger_type, trigger_config, actions } = body;
+        const { name, description, enabled, trigger_type, trigger_config, trigger_command, save_state, actions } = body;
 
         // Verify workflow belongs to this server
         const { data: workflow, error: verifyError } = await supabaseAdmin
@@ -42,6 +42,8 @@ export async function PATCH(
         if (enabled !== undefined) updates.enabled = enabled;
         if (trigger_type !== undefined) updates.trigger_type = trigger_type;
         if (trigger_config !== undefined) updates.trigger_config = trigger_config;
+        if (trigger_command !== undefined) updates.trigger_command = trigger_command?.trim().toLowerCase() || null;
+        if (save_state !== undefined) updates.save_state = save_state;
 
         // Update the workflow
         const { data: updatedWorkflow, error: updateError } = await supabaseAdmin

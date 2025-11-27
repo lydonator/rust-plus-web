@@ -256,8 +256,11 @@ export default function MapPage() {
             // Update only dynamic markers, preserving static ones
             setMarkers(prev => {
                 const staticMarkers = prev.filter(m => 
-                    m.type !== 'Player' && m.type !== 'CargoShip' &&
-                    m.type !== 'PatrolHelicopter' && m.type !== 'Chinook' && m.type !== 'CH47'
+                    // Keep static markers (exclude dynamic types)
+                    m.type !== 1 && m.type !== 'Player' &&           // Player
+                    m.type !== 4 && m.type !== 'CH47' && m.type !== 'Chinook' &&  // Chinook
+                    m.type !== 5 && m.type !== 'CargoShip' &&        // Cargo Ship
+                    m.type !== 8 && m.type !== 'PatrolHelicopter'    // Patrol Helicopter
                 );
                 return [...staticMarkers, ...(dynamicMarkers || [])];
             });
@@ -271,8 +274,11 @@ export default function MapPage() {
             // Update only static markers, preserving dynamic ones
             setMarkers(prev => {
                 const dynamicMarkers = prev.filter(m => 
-                    m.type === 'Player' || m.type === 'CargoShip' ||
-                    m.type === 'PatrolHelicopter' || m.type === 'Chinook' || m.type === 'CH47'
+                    // Keep dynamic markers
+                    m.type === 1 || m.type === 'Player' ||           // Player
+                    m.type === 4 || m.type === 'CH47' || m.type === 'Chinook' ||  // Chinook
+                    m.type === 5 || m.type === 'CargoShip' ||        // Cargo Ship
+                    m.type === 8 || m.type === 'PatrolHelicopter'    // Patrol Helicopter
                 );
                 return [...dynamicMarkers, ...(staticMarkers || [])];
             });

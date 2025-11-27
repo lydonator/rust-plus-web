@@ -826,8 +826,10 @@ class RustPlusManager {
                     }
                     
                     const dynamicMarkers = allMarkers.filter(m =>
-                        m.type === 'Player' || m.type === 'CargoShip' ||
-                        m.type === 'PatrolHelicopter' || m.type === 'Chinook' || m.type === 'CH47'
+                        m.type === 1 || m.type === 'Player' ||           // Player
+                        m.type === 4 || m.type === 'CH47' || m.type === 'Chinook' ||  // Chinook
+                        m.type === 5 || m.type === 'CargoShip' ||        // Cargo Ship  
+                        m.type === 8 || m.type === 'PatrolHelicopter'    // Patrol Helicopter
                     );
                     console.log(`[RustPlus] Filtered ${dynamicMarkers.length} dynamic markers`);
                     this.emitToSSE(serverId, 'dynamic_markers_update', { markers: dynamicMarkers });
@@ -856,8 +858,10 @@ class RustPlusManager {
                     console.log(`[RustPlus] Static fetch: ${allMarkers.length} total markers`);
                     
                     const staticMarkers = allMarkers.filter(m =>
-                        m.type === 'VendingMachine' || m.type === 3 ||
-                        m.type === 'Explosion' || m.type === 'Crate'
+                        m.type === 2 || m.type === 'Explosion' ||        // Explosion
+                        m.type === 3 || m.type === 'VendingMachine' ||   // Vending Machine
+                        m.type === 6 || m.type === 'Crate' ||            // Crate
+                        m.type === 7 || m.type === 'GenericRadius'       // Generic Radius
                     );
                     console.log(`[RustPlus] Filtered ${staticMarkers.length} static markers`);
                     this.emitToSSE(serverId, 'static_markers_update', { markers: staticMarkers });

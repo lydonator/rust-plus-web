@@ -9,6 +9,7 @@ import rustItems from '@/lib/rust-items.json';
 import ChatOverlay from '@/components/ChatOverlay';
 import MapSidebar from '@/components/MapSidebar';
 import { clusterMarkers, getClusterRadius, type MarkerCluster } from '@/lib/markerClustering';
+import { useMapData } from '@/hooks/useMapData';
 
 interface Monument {
     token: string;
@@ -184,46 +185,56 @@ export default function MapPage() {
             });
     }, []);
 
-    // Fetch all map data
-    const fetchMapData = async () => {
-        if (!userId) return;
+    // Use caching hook for map data (handles IndexedDB caching automatically)
+    const {
+        mapData: cachedMapData,
+        serverInfo: cachedServerInfo,
+        loading: mapLoading,
+        error: mapError
+    } = useMapData({
+        serverId,
+        sendCommand,
+        enabled: !!userId
+    });
 
-        setLoading(true);
-        setError(null);
-
-        try {
-            const mapResult = await sendCommand(serverId, 'getMap', {});
-            if (mapResult.success) {
-                setMapData(mapResult.data);
-            }
-
-            const markersResult = await sendCommand(serverId, 'getMapMarkers', {});
-            if (markersResult.success) {
-                setMarkers(markersResult.data.markers || []);
-            }
-
-            const teamResult = await sendCommand(serverId, 'getTeamInfo', {});
-            if (teamResult.success) {
-                setTeamInfo(teamResult.data.members || []);
-            }
-
-            const infoResult = await sendCommand(serverId, 'getServerInfo', {});
-            if (infoResult.success) {
-                setServerInfo(infoResult.data);
-            }
-
-        } catch (err: any) {
-            console.error('Error fetching map data:', err);
-            setError(err.message || 'Failed to fetch map data');
-        } finally {
-            setLoading(false);
-        }
-    };
+    // Sync cached data to local state
+    useEffect(() => {
+        if (cachedMapData) setMapData(cachedMapData);
+    }, [cachedMapData]);
 
     useEffect(() => {
-        if (userId) {
-            fetchMapData();
-        }
+        if (cachedServerInfo) setServerInfo(cachedServerInfo);
+    }, [cachedServerInfo]);
+
+    useEffect(() => {
+        setLoading(mapLoading);
+    }, [mapLoading]);
+
+    useEffect(() => {
+        if (mapError) setError(mapError);
+    }, [mapError]);
+
+    // Fetch dynamic data (markers and team info) - never cached
+    useEffect(() => {
+        if (!userId) return;
+
+        const fetchDynamicData = async () => {
+            try {
+                const markersResult = await sendCommand(serverId, 'getMapMarkers', {});
+                if (markersResult.success) {
+                    setMarkers(markersResult.data.markers || []);
+                }
+
+                const teamResult = await sendCommand(serverId, 'getTeamInfo', {});
+                if (teamResult.success) {
+                    setTeamInfo(teamResult.data.members || []);
+                }
+            } catch (err) {
+                console.error('[Map] Error fetching dynamic data:', err);
+            }
+        };
+
+        fetchDynamicData();
     }, [userId, serverId]);
 
     // Listen for real-time map markers updates via SSE
@@ -1049,18 +1060,18 @@ export default function MapPage() {
                                                         className="drop-shadow-md"
                                                     />
                                                     {/* White count number */}
-                                                     <text
-                                                         x={pos.x}
-                                                         y={pos.y}
-                                                         fill="#ffffff"
-                                                         fontSize={Math.max(12, 14 * dynamicScale)}
-                                                         fontWeight="bold"
-                                                         textAnchor="middle"
-                                                         dominantBaseline="central"
-                                                         className="pointer-events-none select-none"
-                                                     >
-                                                         {cluster.count}
-                                                     </text>
+                                                    <text
+                                                        x={pos.x}
+                                                        y={pos.y}
+                                                        fill="#ffffff"
+                                                        fontSize={Math.max(12, 14 * dynamicScale)}
+                                                        fontWeight="bold"
+                                                        textAnchor="middle"
+                                                        dominantBaseline="central"
+                                                        className="pointer-events-none select-none"
+                                                    >
+                                                        {cluster.count}
+                                                    </text>
                                                 </>
                                             ) : (
                                                 // Single vendor - show shopping cart icon

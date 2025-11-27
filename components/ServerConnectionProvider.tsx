@@ -41,8 +41,14 @@ export function ServerConnectionProvider({ children }: { children: ReactNode }) 
 
         window.addEventListener('server_connected', handleServerConnected as EventListener);
         window.addEventListener('rustplus_event', ((event: CustomEvent) => {
-            if (event.detail.type === 'connection_status' && !event.detail.data.connected) {
-                handleServerDisconnected(event);
+            if (event.detail.type === 'connection_status') {
+                if (event.detail.data.connected) {
+                    // Server connected via RustPlus
+                    handleServerConnected(event);
+                } else {
+                    // Server disconnected
+                    handleServerDisconnected(event);
+                }
             }
         }) as EventListener);
 

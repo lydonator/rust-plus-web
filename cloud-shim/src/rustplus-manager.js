@@ -817,12 +817,23 @@ class RustPlusManager {
             this.getMapMarkers(serverId, (message) => {
                 if (message && message.response && message.response.mapMarkers) {
                     const allMarkers = message.response.mapMarkers.markers || [];
+                    console.log(`[RustPlus] Dynamic fetch: ${allMarkers.length} total markers`);
+                    
+                    // Debug: Log marker types to understand what we're getting
+                    const markerTypes = [...new Set(allMarkers.map(m => m.type))];
+                    if (markerTypes.length > 0) {
+                        console.log(`[RustPlus] Available marker types:`, markerTypes);
+                    }
+                    
                     const dynamicMarkers = allMarkers.filter(m =>
                         m.type === 'Player' || m.type === 'CargoShip' ||
                         m.type === 'PatrolHelicopter' || m.type === 'Chinook' || m.type === 'CH47'
                     );
+                    console.log(`[RustPlus] Filtered ${dynamicMarkers.length} dynamic markers`);
                     this.emitToSSE(serverId, 'dynamic_markers_update', { markers: dynamicMarkers });
                     this.trackMapEvents(serverId, dynamicMarkers);
+                } else {
+                    console.warn(`[RustPlus] Dynamic markers: No valid response from server ${serverId}`);
                 }
             });
         } catch (error) {
@@ -842,12 +853,17 @@ class RustPlusManager {
             this.getMapMarkers(serverId, (message) => {
                 if (message && message.response && message.response.mapMarkers) {
                     const allMarkers = message.response.mapMarkers.markers || [];
+                    console.log(`[RustPlus] Static fetch: ${allMarkers.length} total markers`);
+                    
                     const staticMarkers = allMarkers.filter(m =>
                         m.type === 'VendingMachine' || m.type === 3 ||
                         m.type === 'Explosion' || m.type === 'Crate'
                     );
+                    console.log(`[RustPlus] Filtered ${staticMarkers.length} static markers`);
                     this.emitToSSE(serverId, 'static_markers_update', { markers: staticMarkers });
                     this.checkShoppingList(serverId, staticMarkers);
+                } else {
+                    console.warn(`[RustPlus] Static markers: No valid response from server ${serverId}`);
                 }
             });
         } catch (error) {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { useShim } from '@/hooks/useShim';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 import { useActivityTracker } from '@/hooks/useActivityTracker';
 import InactivityCountdown from '@/components/InactivityCountdown';
 
@@ -15,10 +15,10 @@ interface ActivityManagerProps {
 export default function ActivityManager({ userId, activeServerId, onActiveServerChange }: ActivityManagerProps) {
     const router = useRouter();
     const pathname = usePathname();
-    const { countdownSeconds, disconnectReason, clearDisconnectReason } = useShim(userId);
+    const { countdownSeconds, disconnectReason, clearDisconnectReason, token } = useShimConnection();
 
     // Track activity only when there's an active server
-    useActivityTracker({ userId, enabled: true });
+    useActivityTracker({ userId, token, enabled: true });
 
     // Handle server auto-connection (from FCM pairing)
     useEffect(() => {

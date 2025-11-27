@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { Send, User, AlertTriangle, Anchor, Plane, Box, Flame } from 'lucide-react';
-import { useShim } from '@/hooks/useShim';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 
 interface ChatMessage {
@@ -33,7 +33,7 @@ export default function ChatPage() {
             .then(setUser);
     }, []);
 
-    const { isConnected, sendCommand } = useShim(user?.userId || null);
+    const { isConnected, sendCommand } = useShimConnection();
 
     // Auto-scroll to bottom
     const scrollToBottom = () => {

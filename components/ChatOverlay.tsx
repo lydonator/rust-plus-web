@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, User, AlertTriangle, Anchor, Plane, Box, Flame, MessageSquare, X, Minimize2 } from 'lucide-react';
-import { useShim } from '@/hooks/useShim';
+import { Send, User, AlertTriangle, Anchor, Plane, Box, Flame, MessageSquare, ChevronRight } from 'lucide-react';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 
 interface ChatMessage {
     id: string;
@@ -26,7 +26,7 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
     const [unreadCount, setUnreadCount] = useState(0);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    const { isConnected, sendCommand } = useShim(userId);
+    const { isConnected, sendCommand } = useShimConnection();
 
     // Auto-scroll to bottom
     const scrollToBottom = () => {
@@ -136,52 +136,57 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
                 </button>
             )}
 
-            {/* Chat Panel */}
-            {isOpen && (
-                <div className="fixed right-0 top-0 bottom-0 w-full sm:w-96 z-50 flex flex-col bg-neutral-900/70 backdrop-blur-md border-l border-neutral-800 shadow-2xl animate-in slide-in-from-right duration-300">
+            {/* Chat Panel with glassmorphic effect and animations */}
+            <div
+                className={`fixed right-0 top-0 bottom-0 w-full sm:w-96 z-50 transition-transform duration-500 ease-out ${
+                    isOpen ? 'translate-x-0' : 'translate-x-full'
+                }`}
+            >
+                {/* Glassmorphic Background */}
+                <div className="absolute inset-0 bg-gradient-to-l from-neutral-900/80 via-neutral-900/70 to-neutral-900/60 backdrop-blur-xl border-l border-white/10 shadow-2xl" />
+                
+                {/* Glass Reflection Effect */}
+                <div className="absolute inset-0 bg-gradient-to-bl from-white/5 via-transparent to-transparent" />
+                
+                {/* Content Container */}
+                <div className="relative flex flex-col h-full">
                     {/* Header */}
-                    <div className="flex items-center justify-between p-4 border-b border-neutral-800 bg-neutral-900/95 backdrop-blur-sm">
+                    <div className="flex items-center justify-between p-4 border-b border-white/10 bg-neutral-900/20 backdrop-blur-sm">
                         <div className="flex items-center gap-3">
-                            <MessageSquare className="w-5 h-5 text-rust-500" />
+                            <MessageSquare className="w-5 h-5 text-rust-400" />
                             <div>
                                 <h2 className="font-semibold text-white">Team Chat</h2>
-                                <div className={`flex items-center text-xs ${isConnected ? 'text-green-500' : 'text-red-500'}`}>
-                                    <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+                                <div className={`flex items-center text-xs ${isConnected ? 'text-green-400' : 'text-red-400'}`}>
+                                    <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
                                     {isConnected ? 'Connected' : 'Disconnected'}
                                 </div>
                             </div>
                         </div>
-                        <button
-                            onClick={() => setIsOpen(false)}
-                            className="p-2 hover:bg-neutral-800 rounded-lg transition-colors text-neutral-400 hover:text-white"
-                        >
-                            <X className="w-5 h-5" />
-                        </button>
                     </div>
 
                     {/* Messages Area */}
                     <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-transparent">
                         {messages.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-full text-neutral-500">
+                            <div className="flex flex-col items-center justify-center h-full text-white/60">
                                 <User className="w-12 h-12 mb-3 opacity-50" />
                                 <p className="text-sm">No messages yet</p>
-                                <p className="text-xs text-neutral-600 mt-1">Start chatting with your team!</p>
+                                <p className="text-xs text-white/40 mt-1">Start chatting with your team!</p>
                             </div>
                         ) : (
                             messages.map((msg) => (
                                 <div key={msg.id} className={`flex ${msg.type === 'event' ? 'justify-center' : 'justify-start'}`}>
                                     {msg.type === 'event' ? (
-                                        <div className="flex items-center gap-2 px-3 py-2 bg-neutral-800/50 rounded-lg border border-neutral-700/50 text-sm">
+                                        <div className="flex items-center gap-2 px-3 py-2 bg-white/10 rounded-lg border border-white/20 text-sm backdrop-blur-sm shadow-lg">
                                             {getEventIcon(msg.eventType)}
-                                            <span className="text-neutral-300">{msg.content}</span>
+                                            <span className="text-white/80">{msg.content}</span>
                                         </div>
                                     ) : (
-                                        <div className="max-w-[85%] bg-neutral-800 rounded-lg p-3 shadow-lg">
+                                        <div className="max-w-[85%] bg-white/10 rounded-lg p-3 shadow-lg backdrop-blur-sm border border-white/20">
                                             <div className="flex items-center gap-2 mb-1">
-                                                <User className="w-3 h-3 text-rust-500" />
-                                                <span className="font-medium text-sm text-rust-500">{msg.senderName}</span>
+                                                <User className="w-3 h-3 text-rust-400" />
+                                                <span className="font-medium text-sm text-rust-400">{msg.senderName}</span>
                                             </div>
-                                            <p className="text-sm text-neutral-200 break-words">{msg.content}</p>
+                                            <p className="text-sm text-white break-words">{msg.content}</p>
                                         </div>
                                     )}
                                 </div>
@@ -191,7 +196,7 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
                     </div>
 
                     {/* Input Area */}
-                    <form onSubmit={handleSendMessage} className="p-4 border-t border-neutral-800 bg-neutral-900/95 backdrop-blur-sm">
+                    <form onSubmit={handleSendMessage} className="p-4 border-t border-white/10 bg-neutral-900/20 backdrop-blur-sm">
                         <div className="flex gap-2">
                             <input
                                 type="text"
@@ -199,19 +204,33 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
                                 onChange={(e) => setInputValue(e.target.value)}
                                 placeholder="Type a message..."
                                 disabled={!isConnected}
-                                className="flex-1 px-4 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-white placeholder-neutral-500 focus:outline-none focus:border-rust-500 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                                className="flex-1 px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-rust-400 focus:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed text-sm backdrop-blur-sm"
                             />
                             <button
                                 type="submit"
                                 disabled={!isConnected || !inputValue.trim()}
-                                className="px-4 py-2 bg-rust-600 hover:bg-rust-700 disabled:bg-neutral-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                                className="px-4 py-2 bg-rust-600 hover:bg-rust-700 disabled:bg-white/10 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2 backdrop-blur-sm"
                             >
                                 <Send className="w-4 h-4" />
                             </button>
                         </div>
                     </form>
+                    
+                    {/* Collapsible Tab on Left Edge - Only visible when open */}
+                    <button
+                        onClick={() => setIsOpen(false)}
+                        className={`absolute -left-6 top-1/2 -translate-y-1/2 w-6 h-16 bg-gradient-to-l from-neutral-900/80 to-neutral-800/70 backdrop-blur-md border border-white/10 border-r-0 rounded-l-lg shadow-lg hover:from-neutral-800/90 hover:to-neutral-700/80 transition-all duration-500 flex items-center justify-center group ${
+                            isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-2 pointer-events-none'
+                        }`}
+                        aria-label="Close chat"
+                    >
+                        <ChevronRight className="w-4 h-4 text-white/70 group-hover:text-white transition-colors" />
+                        
+                        {/* Subtle glow effect */}
+                        <div className="absolute inset-0 bg-gradient-to-l from-rust-500/20 to-orange-500/20 rounded-l-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+                    </button>
                 </div>
-            )}
+            </div>
         </>
     );
 }

@@ -113,7 +113,10 @@ export async function DELETE(request: Request) {
         const shimUrl = process.env.NEXT_PUBLIC_SHIM_URL || 'http://localhost:4000';
         await fetch(`${shimUrl}/disconnect-server`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
             body: JSON.stringify({ serverId })
         });
     } catch (err) {

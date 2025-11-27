@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useShim } from '@/hooks/useShim';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 import { useParams } from 'next/navigation';
 import { Users, MapPin, Calendar, Hash, Droplet, Maximize2, Clock, TrendingUp } from 'lucide-react';
 
@@ -18,7 +18,7 @@ export default function ServerOverview() {
             .then(setUser);
     }, []);
 
-    const { isConnected, sendCommand } = useShim(user?.userId || null);
+    const { isConnected, sendCommand } = useShimConnection();
 
     // Initial load from database (one-time only)
     useEffect(() => {

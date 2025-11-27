@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 
 interface UseActivityTrackerOptions {
     userId: string | null;
+    token?: string | null;
     enabled?: boolean;
 }
 
@@ -11,7 +12,7 @@ interface UseActivityTrackerOptions {
  * Activity tracker hook - sends heartbeats to cloud-shim to prevent inactivity disconnect
  * Tracks mouse movement, keyboard input, and touch events
  */
-export function useActivityTracker({ userId, enabled = true }: UseActivityTrackerOptions) {
+export function useActivityTracker({ userId, token, enabled = true }: UseActivityTrackerOptions) {
     const lastHeartbeatRef = useRef<number>(0);
     const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 
@@ -32,14 +33,21 @@ export function useActivityTracker({ userId, enabled = true }: UseActivityTracke
             }
 
             try {
+                const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+
                 await fetch(`${shimUrl}/heartbeat`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     body: JSON.stringify({ userId })
                 });
                 lastHeartbeatRef.current = now;
             } catch (error) {
-                console.error('[Activity] Failed to send heartbeat:', error);
+                // Silently fail on network errors to avoid console spam
+                // Common when waking from sleep or if shim is down (503)
+                // console.debug('[Activity] Failed to send heartbeat:', error);
             }
         };
 
@@ -66,5 +74,5 @@ export function useActivityTracker({ userId, enabled = true }: UseActivityTracke
             window.removeEventListener('touchstart', handleActivity);
             window.removeEventListener('scroll', handleActivity);
         };
-    }, [userId, enabled]);
+    }, [userId, token, enabled]);
 }

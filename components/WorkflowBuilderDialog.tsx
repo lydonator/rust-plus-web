@@ -44,7 +44,7 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
     const [description, setDescription] = useState(workflow?.description || '');
     const [triggerType, setTriggerType] = useState<Workflow['trigger_type']>(workflow?.trigger_type || 'manual');
     const [triggerConfig, setTriggerConfig] = useState<any>(workflow?.trigger_config || {});
-    const [triggerCommand, setTriggerCommand] = useState<string>((workflow as any)?.trigger_command || '');
+    const [triggerCommand, setTriggerCommand] = useState<string>(((workflow as any)?.trigger_command || '').replace(/^!/, ''));
     const [saveState, setSaveState] = useState<boolean>((workflow as any)?.save_state || false);
     const [actions, setActions] = useState<WorkflowAction[]>([]);
     const [devices, setDevices] = useState<SmartDevice[]>([]);
@@ -173,7 +173,7 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                     description: description.trim() || null,
                     trigger_type: triggerType,
                     trigger_config: triggerConfig,
-                    trigger_command: triggerCommand.trim() || null,
+                    trigger_command: triggerCommand.trim() ? `!${triggerCommand.trim()}` : null,
                     save_state: saveState,
                     actions: processedActions
                 })
@@ -323,15 +323,18 @@ export default function WorkflowBuilderDialog({ serverId, workflow, onClose, onS
                                     <label className="block text-sm font-medium text-zinc-300 mb-2">
                                         Chat Command *
                                     </label>
-                                    <input
-                                        type="text"
-                                        value={triggerCommand}
-                                        onChange={(e) => setTriggerCommand(e.target.value)}
-                                        placeholder="!lockdown"
-                                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-white placeholder-zinc-500 focus:outline-none focus:border-rust-500"
-                                    />
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-2 text-zinc-500 select-none">!</span>
+                                        <input
+                                            type="text"
+                                            value={triggerCommand}
+                                            onChange={(e) => setTriggerCommand(e.target.value.replace(/^!/, ''))}
+                                            placeholder="lockdown"
+                                            className="w-full pl-6 pr-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-white placeholder-zinc-500 focus:outline-none focus:border-rust-500"
+                                        />
+                                    </div>
                                     <p className="text-xs text-zinc-500 mt-1">
-                                        Anyone on your team can type this command in team chat to trigger the workflow. Must start with !
+                                        Anyone on your team can type this command in team chat to trigger the workflow. The ! prefix is added automatically.
                                     </p>
                                 </div>
 

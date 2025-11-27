@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useShim } from '@/hooks/useShim';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -22,8 +22,8 @@ export default function Dashboard() {
     // Use global server connection state
     const { activeServerId, setActiveServerId } = useServerConnection();
 
-    // Connect to Cloud Shim
-    const { isConnected, lastNotification, disconnectReason, clearDisconnectReason } = useShim(user?.userId || null);
+    // Connect to Cloud Shim (global connection via provider)
+    const { isConnected, lastNotification, disconnectReason, clearDisconnectReason, token } = useShimConnection();
 
     useEffect(() => {
         // Check for shim disconnection flag and show modal
@@ -119,9 +119,14 @@ export default function Dashboard() {
 
         try {
             const shimUrl = process.env.NEXT_PUBLIC_SHIM_URL || 'http://localhost:4000';
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
             const res = await fetch(`${shimUrl}/connect-server`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ userId: user.userId, serverId })
             });
 
@@ -143,9 +148,14 @@ export default function Dashboard() {
     const handleDisconnectServer = async (serverId: string) => {
         try {
             const shimUrl = process.env.NEXT_PUBLIC_SHIM_URL || 'http://localhost:4000';
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
             const res = await fetch(`${shimUrl}/disconnect-server`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ serverId })
             });
 

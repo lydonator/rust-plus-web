@@ -1098,6 +1098,51 @@ class RustPlusManager {
         console.log(`[RustPlus] ✅ Scheduled BullMQ jobs for server ${serverId}`);
     }
 
+    /**
+     * Cleanup orphaned jobs for servers that no longer exist
+     * Runs on startup to remove "zombie" jobs from Redis
+     */
+    async cleanupOrphanedJobs() {
+        if (!this.queueManager) return;
+
+        console.log('[RustPlus] 🧹 Starting cleanup of orphaned jobs...');
+
+        try {
+            // Get all servers from DB
+            const { data: servers, error } = await supabase
+                .from('servers')
+                .select('id');
+
+            if (error) {
+                console.error('[RustPlus] Failed to fetch servers for cleanup:', error);
+                return;
+            }
+
+            const validServerIds = new Set(servers.map(s => s.id));
+            const queue = this.queueManager.getQueue('rustplus');
+            const repeatableJobs = await queue.getRepeatableJobs();
+
+            let removedCount = 0;
+
+            for (const job of repeatableJobs) {
+                // Check if job is server-specific
+                const match = job.name.match(/^(server-info|map-data|team-info)-([0-9a-f-]+)$/);
+                if (match) {
+                    const serverId = match[2];
+                    if (!validServerIds.has(serverId)) {
+                        console.log(`[RustPlus] 🗑️ Removing orphaned job: ${job.name} (server ${serverId} not found)`);
+                        await queue.removeRepeatableByKey(job.key);
+                        removedCount++;
+                    }
+                }
+            }
+
+            console.log(`[RustPlus] 🧹 Cleanup complete. Removed ${removedCount} orphaned jobs.`);
+        } catch (err) {
+            console.error('[RustPlus] Error during orphaned job cleanup:', err);
+        }
+    }
+
     // Legacy fallback: Use setInterval if BullMQ is not available
     setPollingIntervalsLegacy(serverId, rustPlus) {
         // Clear existing intervals

@@ -1,17 +1,25 @@
 import { SHIM_URL } from './config';
 
+export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
+
 class ShimSSEManager {
     private eventSource: EventSource | null = null;
     private currentUserId: string | null = null;
+    private token: string | null = null;
+    private connectionState: ConnectionState = 'idle';
     private reconnectAttempts = 0;
-    private maxReconnectAttempts = 5;
-    private reconnectDelay = 1000;
-    private isConnecting = false;
+    private maxReconnectAttempts = 10; // Cap at 10 attempts (~15 mins with backoff)
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    
+    private isConnecting = false; // Deprecated in favor of connectionState, but keeping for safety
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+    private connectionWatchdogInterval: ReturnType<typeof setInterval> | null = null;
+    private lastMessageTime = 0;
 
     // Store handler references so we can remove them (Star Wars Easter Egg!)
     private handlers = {
         connected: this.handleLukeSkywalker.bind(this),
+        heartbeat: this.handleBB8.bind(this),
         fcm_status: this.handleHanSolo.bind(this),
         notification: this.handlePrincessLeia.bind(this),
         device_paired: this.handleChewbacca.bind(this),
@@ -39,6 +47,13 @@ class ShimSSEManager {
     private handleLukeSkywalker(event: any) {
         const data = JSON.parse(event.data);
         console.log('[ShimSSE] Connected event:', data);
+        this.lastMessageTime = Date.now();
+    }
+
+    private handleBB8(event: any) {
+        // Heartbeat received - connection is alive
+        // console.log('[ShimSSE] Heartbeat (BB-8) received');
+        this.lastMessageTime = Date.now();
     }
 
     private handleHanSolo(event: any) {
@@ -185,6 +200,7 @@ class ShimSSEManager {
 
         // Attach all event listeners using bound handler references
         this.eventSource.addEventListener('connected', this.handlers.connected);
+        this.eventSource.addEventListener('heartbeat', this.handlers.heartbeat);
         this.eventSource.addEventListener('fcm_status', this.handlers.fcm_status);
         this.eventSource.addEventListener('notification', this.handlers.notification);
         this.eventSource.addEventListener('device_paired', this.handlers.device_paired);
@@ -213,6 +229,7 @@ class ShimSSEManager {
 
         // Remove all event listeners using the same bound handler references
         this.eventSource.removeEventListener('connected', this.handlers.connected);
+        this.eventSource.removeEventListener('heartbeat', this.handlers.heartbeat);
         this.eventSource.removeEventListener('fcm_status', this.handlers.fcm_status);
         this.eventSource.removeEventListener('notification', this.handlers.notification);
         this.eventSource.removeEventListener('device_paired', this.handlers.device_paired);
@@ -236,96 +253,143 @@ class ShimSSEManager {
         this.eventSource.removeEventListener('error', this.handlers.error);
     }
 
-    connect(userId: string): void {
-        // If already connected to this user, do nothing
-        if (this.currentUserId === userId && this.eventSource) {
-            console.log('[ShimSSE] Already connected for user:', userId);
+    private updateState(newState: ConnectionState): void {
+        if (this.connectionState !== newState) {
+            this.connectionState = newState;
+            console.log(`[ShimSSE] State changed: ${newState}`);
+            window.dispatchEvent(new CustomEvent('shim_connection_state_changed', { detail: { state: newState } }));
+        }
+    }
+
+    getState(): ConnectionState {
+        return this.connectionState;
+    }
+
+    private attemptReconnect(): void {
+        if (this.connectionState === 'offline') return;
+
+        this.updateState('reconnecting');
+
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error('[ShimSSE] Max reconnect attempts reached. Giving up.');
+            this.updateState('offline');
+            window.dispatchEvent(new CustomEvent('shim_connection_failed'));
             return;
         }
 
-        // Prevent multiple simultaneous connection attempts
-        if (this.isConnecting) {
-            console.log('[ShimSSE] Connection already in progress, skipping');
+        const delay = Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempts));
+        console.log(`[ShimSSE] Reconnecting in ${delay}ms (Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectAttempts++;
+            this.reconnect();
+        }, delay);
+    }
+
+    connect(userId: string, token?: string): void {
+        if (token) this.token = token;
+
+        // If already connected to this user, do nothing
+        if (this.currentUserId === userId && this.connectionState === 'connected' && this.eventSource) {
+            console.log('[ShimSSE] Already connected for user:', userId);
             return;
         }
 
         // If switching users, disconnect old connection
         if (this.currentUserId && this.currentUserId !== userId) {
             console.log('[ShimSSE] Switching users, disconnecting old connection');
-            this.disconnect();
+            this.disconnect(true); // Clear old user state
+        }
+
+        // Cancel any pending reconnect
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
         }
 
         console.log('[ShimSSE] Creating SSE connection for user:', userId);
-        this.isConnecting = true;
+        this.updateState('connecting');
         this.currentUserId = userId;
+        this.isConnecting = true; // Legacy flag
 
         // Create EventSource connection
-        this.eventSource = new EventSource(`${SHIM_URL}/events/${userId}`);
+        const url = this.token 
+            ? `${SHIM_URL}/events/${userId}?token=${this.token}`
+            : `${SHIM_URL}/events/${userId}`; // Fallback for legacy/dev
+            
+        this.eventSource = new EventSource(url);
 
         // Handle connection open
         this.eventSource.onopen = () => {
             console.log('[ShimSSE] ✅ Connected');
+            this.updateState('connected');
             this.reconnectAttempts = 0;
             this.isConnecting = false;
-
-            // Stop heartbeat polling since we're connected
-            this.stopHeartbeat();
+            this.lastMessageTime = Date.now();
+            
+            // Start connection watchdog
+            this.startConnectionWatchdog();
         };
 
         // Handle generic messages
         this.eventSource.onmessage = (event) => {
-            console.log('[ShimSSE] Message:', event);
+            // console.log('[ShimSSE] Message:', event);
+            this.lastMessageTime = Date.now();
         };
 
         // Attach all event listeners
         this.attachEventListeners();
 
-        // Handle connection errors - NO RETRIES, immediate disconnect
+        // Handle connection errors with retry logic
         this.eventSource.onerror = (error) => {
-            console.error('[ShimSSE] ❌ Connection error - IMMEDIATE DISCONNECT');
-            console.error('[ShimSSE] EventSource readyState:', this.eventSource?.readyState);
-
-            // Clear connecting flag
+            console.error('[ShimSSE] ❌ Connection error');
+            
+            // Clean up current source
+            this.eventSource?.close();
+            this.eventSource = null;
+            this.stopConnectionWatchdog();
             this.isConnecting = false;
 
-            // Close the connection but PRESERVE userId so we can reconnect on dashboard
-            this.disconnect(false);
-
-            // Start heartbeat polling to detect when shim comes back
-            this.startHeartbeat();
-
-            // Notify UI to redirect user immediately
-            window.dispatchEvent(new CustomEvent('shim_connection_failed'));
+            // Attempt recovery
+            this.attemptReconnect();
         };
     }
 
     private startHeartbeat(): void {
-        // Don't start if already running
-        if (this.heartbeatInterval) {
-            return;
-        }
-
-        console.log('[ShimSSE] 🔄 Starting heartbeat polling (every 3s)');
-
-        this.heartbeatInterval = setInterval(async () => {
-            try {
-                const response = await fetch(`${SHIM_URL}/heartbeat`);
-                if (response.ok) {
-                    console.log('[ShimSSE] ✅ Shim is back online! Auto-reconnecting...');
-                    this.stopHeartbeat();
-                    this.reconnect();
-                }
-            } catch (e) {
-                // Shim still offline, will retry
-            }
-        }, 3000);
+        // Deprecated: Replaced by attemptReconnect with exponential backoff
     }
 
     private stopHeartbeat(): void {
+        // Deprecated
         if (this.heartbeatInterval) {
-            console.log('[ShimSSE] ⏹️ Stopping heartbeat polling');
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
+        }
+    }
+
+    private startConnectionWatchdog(): void {
+        if (this.connectionWatchdogInterval) return;
+
+        console.log('[ShimSSE] Starting connection watchdog');
+        this.connectionWatchdogInterval = setInterval(() => {
+            if (!this.isConnected()) return;
+
+            const timeSinceLastMessage = Date.now() - this.lastMessageTime;
+            if (timeSinceLastMessage > 45000) { // 45s timeout (heartbeat is every 30s)
+                console.warn(`[ShimSSE] Connection watchdog timed out (${timeSinceLastMessage}ms). Reconnecting...`);
+                
+                this.eventSource?.close();
+                this.eventSource = null;
+                this.attemptReconnect();
+            }
+        }, 10000); // Check every 10s
+    }
+
+    private stopConnectionWatchdog(): void {
+        if (this.connectionWatchdogInterval) {
+            console.log('[ShimSSE] Stopping connection watchdog');
+            clearInterval(this.connectionWatchdogInterval);
+            this.connectionWatchdogInterval = null;
         }
     }
 
@@ -341,10 +405,9 @@ class ShimSSEManager {
 
         if (clearUserId) {
             this.currentUserId = null;
-            // Stop heartbeat if clearing userId (full disconnect)
-            this.stopHeartbeat();
         }
 
+        this.stopConnectionWatchdog();
         this.isConnecting = false;
     }
 
@@ -369,29 +432,36 @@ class ShimSSEManager {
 
         // Force reconnect by calling connect with stored userId
         const userId = this.currentUserId;
+        const token = this.token || undefined;
         this.currentUserId = null; // Clear so connect() doesn't skip
-        this.connect(userId);
+        this.connect(userId, token);
     }
 }
 
 // Singleton instance
 let shimSSEInstance: ShimSSEManager | null = null;
 
-export function getShimSSE(userId: string): ShimSSEManager {
+export function getShimSSE(userId: string, token?: string): ShimSSEManager {
     if (!shimSSEInstance) {
         shimSSEInstance = new ShimSSEManager();
     }
-    shimSSEInstance.connect(userId);
+    shimSSEInstance.connect(userId, token);
     return shimSSEInstance;
 }
 
 // Send command via HTTP POST
-export async function sendShimCommand(userId: string, serverId: string, command: string, payload: any) {
+export async function sendShimCommand(userId: string, serverId: string, command: string, payload: any, token?: string) {
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${SHIM_URL}/command`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
             userId,
             serverId,

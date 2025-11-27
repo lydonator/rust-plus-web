@@ -12,7 +12,8 @@ export async function GET(request: Request) {
         const decoded = jwt.verify(token, process.env.SUPABASE_SERVICE_ROLE_KEY || 'default-secret') as any;
         return NextResponse.json({
             userId: decoded.userId,
-            steamId: decoded.steamId
+            steamId: decoded.steamId,
+            token: token
         });
     } catch (error) {
         return NextResponse.json({ error: 'Invalid token' }, { status: 401 });

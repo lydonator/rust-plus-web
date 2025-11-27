@@ -3,7 +3,7 @@
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Info, MapPin, Users, Plus, Minus, RotateCcw, ShoppingCart, Grid3X3, Skull } from 'lucide-react';
-import { useShim } from '@/hooks/useShim';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 import rustItems from '@/lib/rust-items.json';
 import ChatOverlay from '@/components/ChatOverlay';
@@ -173,7 +173,7 @@ export default function MapPage() {
 
     const itemsDb = rustItems as RustItemsDatabase;
 
-    const { sendCommand } = useShim(userId);
+    const { sendCommand } = useShimConnection();
 
     // Get user ID
     useEffect(() => {
@@ -446,6 +446,50 @@ export default function MapPage() {
         };
     }, [userId, serverId, serverInfo, mapData]);
 
+    const handleWheel = (e: React.WheelEvent) => {
+        const zoomSensitivity = 0.001;
+        const delta = -e.deltaY * zoomSensitivity;
+        const newScale = Math.min(Math.max(0.5, scale + delta), 8);
+
+        if (!containerRef.current) return;
+
+        // Calculate mouse position relative to the container center
+        const rect = containerRef.current.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left - rect.width / 2;
+        const mouseY = e.clientY - rect.top - rect.height / 2;
+
+        // Calculate the ratio of change
+        const ratio = newScale / scale;
+
+        // Adjust position to keep the point under the mouse stationary
+        const newPosition = {
+            x: mouseX - (mouseX - position.x) * ratio,
+            y: mouseY - (mouseY - position.y) * ratio
+        };
+
+        setScale(newScale);
+        setPosition(newPosition);
+    };
+
+    // Set up wheel event listener to suppress console warnings
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        const wheelHandler = (e: WheelEvent) => {
+            // Only prevent default, don't handle zoom here
+            // Let React's onWheel handle the actual zoom logic
+            e.preventDefault();
+        };
+
+        // Add non-passive event listener just for preventDefault
+        container.addEventListener('wheel', wheelHandler, { passive: false });
+
+        return () => {
+            container.removeEventListener('wheel', wheelHandler);
+        };
+    }, []);
+
     // Track death locations (simplified: always update if dead)
     useEffect(() => {
         setDeathLocations(prev => {
@@ -579,32 +623,7 @@ export default function MapPage() {
         return { x: xScreen, y: yScreen };
     };
 
-    const handleWheel = (e: React.WheelEvent) => {
-        e.preventDefault();
-        if (!containerRef.current) return;
 
-        const zoomSensitivity = 0.001;
-        const delta = -e.deltaY * zoomSensitivity;
-        const newScale = Math.min(Math.max(0.5, scale + delta), 8);
-
-        // Calculate mouse position relative to the container center
-        const rect = containerRef.current.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left - rect.width / 2;
-        const mouseY = e.clientY - rect.top - rect.height / 2;
-
-        // Calculate the ratio of change
-        const ratio = newScale / scale;
-
-        // Adjust position to keep the point under the mouse stationary
-        // Formula: newPos = mousePos - (mousePos - oldPos) * ratio
-        const newPosition = {
-            x: mouseX - (mouseX - position.x) * ratio,
-            y: mouseY - (mouseY - position.y) * ratio
-        };
-
-        setScale(newScale);
-        setPosition(newPosition);
-    };
 
     const handleMouseDown = (e: React.MouseEvent) => {
         setIsDragging(true);
@@ -978,7 +997,10 @@ export default function MapPage() {
                                 {/* Clustered Vending Machines */}
                                 {showMarkers && vendingClusters.map((cluster) => {
                                     const pos = monumentToScreen(cluster.x, cluster.y);
-                                    const baseRadius = Math.max(8, 12 / scale);
+                                    // Dynamic scaling: larger when zoomed out, smaller when zoomed in
+                                    // At scale 1.0: baseRadius = 20, at scale 4.0: baseRadius = 12
+                                    const dynamicScale = Math.max(0.6, 2.0 / scale); // More visible when zoomed out
+                                    const baseRadius = Math.max(8, 12 * dynamicScale);
 
                                     // Check if any marker in cluster is highlighted
                                     const isHighlighted = cluster.markers.some(m => highlightedVendors.includes(m.id));
@@ -1027,18 +1049,18 @@ export default function MapPage() {
                                                         className="drop-shadow-md"
                                                     />
                                                     {/* White count number */}
-                                                    <text
-                                                        x={pos.x}
-                                                        y={pos.y}
-                                                        fill="#ffffff"
-                                                        fontSize={Math.max(12, 14 / scale)}
-                                                        fontWeight="bold"
-                                                        textAnchor="middle"
-                                                        dominantBaseline="central"
-                                                        className="pointer-events-none select-none"
-                                                    >
-                                                        {cluster.count}
-                                                    </text>
+                                                     <text
+                                                         x={pos.x}
+                                                         y={pos.y}
+                                                         fill="#ffffff"
+                                                         fontSize={Math.max(12, 14 * dynamicScale)}
+                                                         fontWeight="bold"
+                                                         textAnchor="middle"
+                                                         dominantBaseline="central"
+                                                         className="pointer-events-none select-none"
+                                                     >
+                                                         {cluster.count}
+                                                     </text>
                                                 </>
                                             ) : (
                                                 // Single vendor - show shopping cart icon
@@ -1153,7 +1175,9 @@ export default function MapPage() {
                                     if (isVending || marker.type === 1 || marker.type === 'Player') return null;
 
                                     const pos = monumentToScreen(marker.x, marker.y);
-                                    const baseRadius = Math.max(4, 8 / scale);
+                                    // Dynamic scaling for event markers
+                                    const dynamicScale = Math.max(0.6, 2.0 / scale);
+                                    const baseRadius = Math.max(4, 8 * dynamicScale);
                                     const radius = baseRadius;
                                     const stroke = Math.max(1, 2 / scale);
                                     const markerColor = getMarkerColor(marker.type);
@@ -1176,7 +1200,9 @@ export default function MapPage() {
                                 {/* Death Markers (Persistent) */}
                                 {showTeam && Object.entries(deathLocations).map(([steamId, pos]) => {
                                     const screenPos = monumentToScreen(pos.x, pos.y);
-                                    const radius = Math.max(5, 10 / scale);
+                                    // Dynamic scaling for death markers
+                                    const dynamicScale = Math.max(0.6, 2.0 / scale);
+                                    const radius = Math.max(5, 10 * dynamicScale);
                                     const skullSize = radius * 1.4;
 
                                     return (
@@ -1209,10 +1235,12 @@ export default function MapPage() {
                                     if (!member.isAlive) return null;
 
                                     const pos = monumentToScreen(member.x, member.y);
-                                    const radius = Math.max(5, 10 / scale);
-                                    const stroke = Math.max(1.5, 3 / scale);
-                                    const fontSize = Math.max(8, 12 / scale);
-                                    const textOffset = Math.max(15, 25 / scale);
+                                    // Dynamic scaling for team member markers
+                                    const dynamicScale = Math.max(0.6, 2.0 / scale);
+                                    const radius = Math.max(5, 10 * dynamicScale);
+                                    const stroke = Math.max(1.5, 3 * dynamicScale);
+                                    const fontSize = Math.max(8, 12 * dynamicScale);
+                                    const textOffset = Math.max(15, 25 * dynamicScale);
 
                                     // Determine color (Blue=Online, Red=Offline)
                                     const fillColor = member.isOnline ? '#3b82f6' : '#ef4444';

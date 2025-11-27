@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import { useShim } from '@/hooks/useShim';
+import { useShimConnection } from '@/components/ShimConnectionProvider';
 import { useShimConnectionGuard } from '@/hooks/useShimConnection';
 import SmartSwitch from '@/components/devices/SmartSwitch';
 import Alarm from '@/components/devices/Alarm';
@@ -168,7 +168,7 @@ export default function DevicesPage() {
             });
     }, []);
 
-    const { isConnected, sendCommand } = useShim(userId);
+    const { isConnected, sendCommand } = useShimConnection();
 
     const fetchDevices = useCallback(async (shouldValidate = false) => {
         try {

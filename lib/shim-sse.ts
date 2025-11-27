@@ -46,7 +46,14 @@ class ShimSSEManager {
     // Event handlers as named methods (Star Wars themed!)
     private handleLukeSkywalker(event: any) {
         const data = JSON.parse(event.data);
-        console.log('[ShimSSE] Connected event:', data);
+        console.log('[ShimSSE] ✅ Connected');
+        this.connectionState = 'connected';
+        
+        // Clear any active servers when shim reconnects (after being down)
+        // This forces users to manually reconnect, avoiding complex state management
+        console.log('[ShimSSE] Clearing active servers on shim reconnection');
+        window.dispatchEvent(new CustomEvent('shim_reconnected_clear_servers'));
+        window.dispatchEvent(new CustomEvent('shim_connected'));
     }
 
     private handleBB8(event: any) {
@@ -95,14 +102,19 @@ class ShimSSEManager {
     private handleObiWan(event: any) {
         const data = JSON.parse(event.data);
         console.log('[ShimSSE] Connection Status:', data);
+        console.log('[ShimSSE] Dispatching connection_status event for server:', data.serverId);
         window.dispatchEvent(new CustomEvent('rustplus_event', {
             detail: { serverId: data.serverId, type: 'connection_status', data }
         }));
+        console.log('[ShimSSE] connection_status event dispatched');
     }
 
     private handleR2D2(event: any) {
         const data = JSON.parse(event.data);
-        console.log('[ShimSSE] RustPlus Message:', data);
+        // Only log non-empty messages to reduce console noise
+        if (data && Object.keys(data).length > 2) { // More than just serverId and type
+            console.log('[ShimSSE] RustPlus Message:', data);
+        }
         window.dispatchEvent(new CustomEvent('rustplus_event', {
             detail: { serverId: data.serverId, type: 'message', data }
         }));
@@ -110,7 +122,8 @@ class ShimSSEManager {
 
     private handleC3PO(event: any) {
         const data = JSON.parse(event.data);
-        console.log('[ShimSSE] Server Info Update:', data);
+        // Reduce server info logging frequency to avoid spam
+        // console.log('[ShimSSE] Server Info Update:', data);
         window.dispatchEvent(new CustomEvent('server_info_update', { detail: data }));
     }
 
@@ -134,7 +147,8 @@ class ShimSSEManager {
 
     private handleLando(event: any) {
         const data = JSON.parse(event.data);
-        console.log('[ShimSSE] Team Info Update:', data);
+        // Reduce team info logging frequency to avoid spam
+        // console.log('[ShimSSE] Team Info Update:', data);
         window.dispatchEvent(new CustomEvent('team_info_update', { detail: data }));
     }
 

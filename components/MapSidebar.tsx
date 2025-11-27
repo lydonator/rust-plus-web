@@ -105,11 +105,11 @@ export default function MapSidebar({
             {!isOpen && (
                 <button
                     onClick={() => setIsOpen(true)}
-                    className="fixed top-1/2 -translate-y-1/2 left-[16.75rem] z-40 p-4 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg transition-all duration-200 hover:scale-110 group"
+                    className="absolute top-1/2 -translate-y-1/2 left-0 z-40 p-4 bg-blue-600 hover:bg-blue-700 text-white rounded-r-xl shadow-lg transition-all duration-200 hover:scale-110 group"
                     aria-label="Open shopping tools"
                 >
                     <ShoppingBag className="w-6 h-6" />
-                    <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-neutral-900 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                    <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-neutral-900 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
                         Shopping Tools
                     </div>
                 </button>
@@ -117,54 +117,52 @@ export default function MapSidebar({
 
             {/* Sidebar Drawer with glassmorphic effect and animations */}
             <div
-                className={`fixed left-0 top-0 bottom-0 w-full sm:w-96 z-50 transition-transform duration-500 ease-out ${
-                    isOpen ? 'translate-x-0' : '-translate-x-full'
-                }`}
+                className={`absolute left-0 top-0 bottom-0 w-full sm:w-96 z-50 transition-transform duration-500 ease-out ${isOpen ? 'translate-x-0' : '-translate-x-full'
+                    }`}
+                onMouseDown={(e) => e.stopPropagation()}
+                onWheel={(e) => e.stopPropagation()}
             >
                 {/* Glassmorphic Background */}
                 <div className="absolute inset-0 bg-gradient-to-r from-neutral-900/80 via-neutral-900/70 to-neutral-900/60 backdrop-blur-xl border-r border-white/10 shadow-2xl" />
-                
+
                 {/* Glass Reflection Effect */}
                 <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-transparent" />
-                
+
                 {/* Content Container */}
                 <div className="relative flex flex-col h-full">
                     {/* Header */}
                     <div className="flex items-center justify-between p-4 border-b border-white/10 bg-neutral-900/20 backdrop-blur-sm">
                         <h2 className="text-lg font-semibold text-white">Shopping Tools</h2>
                     </div>
-                    
+
                     {/* Tabs */}
                     <div className="flex border-b border-white/10 bg-black/20">
                         <button
                             onClick={() => setActiveTab('search')}
-                            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 transition-all duration-200 ${
-                                activeTab === 'search'
+                            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 transition-all duration-200 ${activeTab === 'search'
                                     ? 'bg-white/10 text-white border-b-2 border-blue-400 shadow-lg'
                                     : 'text-white/70 hover:text-white hover:bg-white/5'
-                            }`}
+                                }`}
                         >
                             <Search className="w-4 h-4" />
                             <span className="text-sm font-medium">Search</span>
                         </button>
                         <button
                             onClick={() => setActiveTab('list')}
-                            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 transition-all duration-200 ${
-                                activeTab === 'list'
+                            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 transition-all duration-200 ${activeTab === 'list'
                                     ? 'bg-white/10 text-white border-b-2 border-blue-400 shadow-lg'
                                     : 'text-white/70 hover:text-white hover:bg-white/5'
-                            }`}
+                                }`}
                         >
                             <ShoppingBag className="w-4 h-4" />
                             <span className="text-sm font-medium">List</span>
                         </button>
                         <button
                             onClick={() => setActiveTab('stats')}
-                            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 transition-all duration-200 ${
-                                activeTab === 'stats'
+                            className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 transition-all duration-200 ${activeTab === 'stats'
                                     ? 'bg-white/10 text-white border-b-2 border-blue-400 shadow-lg'
                                     : 'text-white/70 hover:text-white hover:bg-white/5'
-                            }`}
+                                }`}
                         >
                             <BarChart3 className="w-4 h-4" />
                             <span className="text-sm font-medium">Stats</span>
@@ -229,13 +227,12 @@ export default function MapSidebar({
                     {/* Collapsible Tab on Right Edge - Only visible when open */}
                     <button
                         onClick={handleClose}
-                        className={`absolute -right-6 top-1/2 -translate-y-1/2 w-6 h-16 bg-gradient-to-r from-neutral-900/80 to-neutral-800/70 backdrop-blur-md border border-white/10 border-l-0 rounded-r-lg shadow-lg hover:from-neutral-800/90 hover:to-neutral-700/80 transition-all duration-500 flex items-center justify-center group ${
-                            isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
-                        }`}
+                        className={`absolute -right-6 top-1/2 -translate-y-1/2 w-6 h-16 bg-gradient-to-r from-neutral-900/80 to-neutral-800/70 backdrop-blur-md border border-white/10 border-l-0 rounded-r-lg shadow-lg hover:from-neutral-800/90 hover:to-neutral-700/80 transition-all duration-500 flex items-center justify-center group ${isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
+                            }`}
                         aria-label="Close sidebar"
                     >
                         <ChevronLeft className="w-4 h-4 text-white/70 group-hover:text-white transition-colors" />
-                        
+
                         {/* Subtle glow effect */}
                         <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-r-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
                     </button>

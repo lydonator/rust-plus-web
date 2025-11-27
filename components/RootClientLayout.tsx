@@ -18,23 +18,7 @@ function RootClientLayoutInner({ children }: { children: React.ReactNode }) {
             if (userData?.userId && userId !== userData.userId) {
                 setUserId(userData.userId);
                 
-                // Fetch active server state from shim with auth token
-                const headers: Record<string, string> = {};
-                if (userData.token) {
-                    headers['Authorization'] = `Bearer ${userData.token}`;
-                }
-                
-                fetch(`${process.env.NEXT_PUBLIC_SHIM_URL}/active-server/${userData.userId}`, {
-                    headers
-                })
-                    .then(res => res.ok ? res.json() : null)
-                    .then(data => {
-                        if (data?.activeServerId) {
-                            console.log('[RootClientLayout] Restoring active server:', data.activeServerId);
-                            setActiveServerId(data.activeServerId);
-                        }
-                    })
-                    .catch(err => console.error('Failed to fetch active server:', err));
+                // Active server restoration removed - users must manually select servers
             }
         }) as EventListener;
         

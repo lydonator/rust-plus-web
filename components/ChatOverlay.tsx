@@ -122,7 +122,7 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
             {!isOpen && (
                 <button
                     onClick={() => setIsOpen(true)}
-                    className="fixed top-1/2 -translate-y-1/2 right-6 z-40 p-4 bg-rust-600 hover:bg-rust-700 text-white rounded-full shadow-lg transition-all duration-200 hover:scale-110 group"
+                    className="fixed top-1/2 -translate-y-1/2 right-0 z-40 p-4 bg-rust-600 hover:bg-rust-700 text-white rounded-l-xl shadow-lg transition-all duration-200 hover:scale-110 group"
                 >
                     <MessageSquare className="w-6 h-6" />
                     {unreadCount > 0 && (
@@ -138,16 +138,17 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
 
             {/* Chat Panel with glassmorphic effect and animations */}
             <div
-                className={`fixed right-0 top-0 bottom-0 w-full sm:w-96 z-50 transition-transform duration-500 ease-out ${
-                    isOpen ? 'translate-x-0' : 'translate-x-full'
-                }`}
+                className={`fixed right-0 top-0 bottom-0 w-full sm:w-96 z-50 transition-transform duration-500 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full'
+                    }`}
+                onMouseDown={(e) => e.stopPropagation()}
+                onWheel={(e) => e.stopPropagation()}
             >
                 {/* Glassmorphic Background */}
                 <div className="absolute inset-0 bg-gradient-to-l from-neutral-900/80 via-neutral-900/70 to-neutral-900/60 backdrop-blur-xl border-l border-white/10 shadow-2xl" />
-                
+
                 {/* Glass Reflection Effect */}
                 <div className="absolute inset-0 bg-gradient-to-bl from-white/5 via-transparent to-transparent" />
-                
+
                 {/* Content Container */}
                 <div className="relative flex flex-col h-full">
                     {/* Header */}
@@ -215,17 +216,16 @@ export default function ChatOverlay({ serverId, userId }: ChatOverlayProps) {
                             </button>
                         </div>
                     </form>
-                    
+
                     {/* Collapsible Tab on Left Edge - Only visible when open */}
                     <button
                         onClick={() => setIsOpen(false)}
-                        className={`absolute -left-6 top-1/2 -translate-y-1/2 w-6 h-16 bg-gradient-to-l from-neutral-900/80 to-neutral-800/70 backdrop-blur-md border border-white/10 border-r-0 rounded-l-lg shadow-lg hover:from-neutral-800/90 hover:to-neutral-700/80 transition-all duration-500 flex items-center justify-center group ${
-                            isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-2 pointer-events-none'
-                        }`}
+                        className={`absolute -left-6 top-1/2 -translate-y-1/2 w-6 h-16 bg-gradient-to-l from-neutral-900/80 to-neutral-800/70 backdrop-blur-md border border-white/10 border-r-0 rounded-l-lg shadow-lg hover:from-neutral-800/90 hover:to-neutral-700/80 transition-all duration-500 flex items-center justify-center group ${isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-2 pointer-events-none'
+                            }`}
                         aria-label="Close chat"
                     >
                         <ChevronRight className="w-4 h-4 text-white/70 group-hover:text-white transition-colors" />
-                        
+
                         {/* Subtle glow effect */}
                         <div className="absolute inset-0 bg-gradient-to-l from-rust-500/20 to-orange-500/20 rounded-l-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
                     </button>

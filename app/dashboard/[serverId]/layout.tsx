@@ -33,9 +33,8 @@ export default function ServerDashboardLayout({
             console.log(`[ServerLayout] Server ${serverId} is not active (active: ${activeServerId}). Redirecting to dashboard...`);
             router.push('/dashboard');
         } else if (serverId && activeServerId === serverId && !isServerConnected(serverId)) {
-            console.log(`[ServerLayout] Server ${serverId} is not connected yet. Waiting for connection...`);
-            // Don't redirect, just keep checking - will show loading state
-            setIsChecking(true);
+            console.log(`[ServerLayout] Server ${serverId} is not connected. Redirecting to dashboard for manual reconnection.`);
+            router.push('/dashboard');
         } else if (serverId && activeServerId === serverId && isServerConnected(serverId)) {
             console.log(`[ServerLayout] Server ${serverId} is connected. Proceeding to page...`);
             setIsChecking(false);

@@ -252,10 +252,10 @@ export default function MapPage() {
             const customEvent = event as CustomEvent;
             const dynamicMarkers = customEvent.detail?.markers;
             console.log('[Map] Received dynamic markers update:', dynamicMarkers?.length);
-            
+
             // Update only dynamic markers, preserving static ones
             setMarkers(prev => {
-                const staticMarkers = prev.filter(m => 
+                const staticMarkers = prev.filter(m =>
                     // Keep static markers (exclude dynamic types)
                     m.type !== 1 && m.type !== 'Player' &&           // Player
                     m.type !== 4 && m.type !== 'CH47' && m.type !== 'Chinook' &&  // Chinook
@@ -270,10 +270,10 @@ export default function MapPage() {
             const customEvent = event as CustomEvent;
             const staticMarkers = customEvent.detail?.markers;
             console.log('[Map] Received static markers update:', staticMarkers?.length);
-            
+
             // Update only static markers, preserving dynamic ones
             setMarkers(prev => {
-                const dynamicMarkers = prev.filter(m => 
+                const dynamicMarkers = prev.filter(m =>
                     // Keep dynamic markers
                     m.type === 1 || m.type === 'Player' ||           // Player
                     m.type === 4 || m.type === 'CH47' || m.type === 'Chinook' ||  // Chinook
@@ -757,7 +757,7 @@ export default function MapPage() {
     }
 
     return (
-        <div className="flex flex-col h-screen bg-neutral-950 p-6">
+        <div className="flex flex-col h-screen bg-neutral-950 p-6 overflow-hidden">
             <style jsx>{`
                 @keyframes gentle-bounce {
                     0%, 100% {
@@ -866,7 +866,7 @@ export default function MapPage() {
 
                 <div
                     ref={containerRef}
-                    className="w-full h-full cursor-move overflow-hidden"
+                    className="relative w-full h-full cursor-move overflow-hidden"
                     onWheel={handleWheel}
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
@@ -1330,79 +1330,78 @@ export default function MapPage() {
                             </svg>
                         </div>
                     </div>
+                    {/* Legend Overlay */}
+                    <div className="absolute bottom-4 left-4 right-4 z-30 grid grid-cols-3 gap-4 pointer-events-none">
+                        {showMonuments && mapData.monuments && mapData.monuments.length > 0 && (
+                            <div className="bg-neutral-900/90 backdrop-blur rounded-lg p-4 pointer-events-auto shadow-lg border border-white/10" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+                                <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                                    <Info className="w-4 h-4" />
+                                    Monuments
+                                </h3>
+                                <p className="text-xs text-neutral-400">
+                                    {mapData.monuments.length} monuments visible
+                                </p>
+                            </div>
+                        )}
+
+                        {showMarkers && markers.length > 0 && (
+                            <div className="bg-neutral-900/90 backdrop-blur rounded-lg p-4 pointer-events-auto shadow-lg border border-white/10" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+                                <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                                    <MapPin className="w-4 h-4" />
+                                    Active Markers
+                                </h3>
+                                <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                                    {Array.from(new Set(markers.map(m => m.type))).map(type => {
+                                        const count = markers.filter(m => m.type === type).length;
+                                        return (
+                                            <div key={String(type)} className="flex items-center gap-2 text-xs">
+                                                <div
+                                                    className="w-3 h-3 rounded-full"
+                                                    style={{ backgroundColor: getMarkerColor(type) }}
+                                                />
+                                                <span className="text-neutral-300">
+                                                    {getMarkerTypeName(type)} ({count})
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {showTeam && teamInfo.length > 0 && (
+                            <div className="bg-neutral-900/90 backdrop-blur rounded-lg p-4 pointer-events-auto shadow-lg border border-white/10" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
+                                <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                                    <Users className="w-4 h-4" />
+                                    Team Members
+                                </h3>
+                                <div className="space-y-1">
+                                    {teamInfo.map((member, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 text-xs">
+                                            <div
+                                                className={`w-2 h-2 rounded-full ${member.isAlive ? 'bg-green-500' : 'bg-red-500'}`}
+                                            />
+                                            <span className={member.isAlive ? 'text-neutral-300' : 'text-neutral-500'}>
+                                                {member.name} {member.isOnline ? '(Online)' : '(Offline)'}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Chat Overlay */}
+                    <ChatOverlay serverId={serverId} userId={userId} />
+
+                    {/* Shopping Sidebar */}
+                    <MapSidebar
+                        serverId={serverId}
+                        onItemSearch={handleItemSearch}
+                        onClearHighlights={handleClearHighlights}
+                    />
                 </div>
             </div>
-
-            {/* Legend */}
-            <div className="mt-4 grid grid-cols-3 gap-4">
-                {showMonuments && mapData.monuments && mapData.monuments.length > 0 && (
-                    <div className="bg-neutral-900 rounded-lg p-4">
-                        <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-                            <Info className="w-4 h-4" />
-                            Monuments
-                        </h3>
-                        <p className="text-xs text-neutral-400">
-                            {mapData.monuments.length} monuments visible
-                        </p>
-                    </div>
-                )}
-
-                {showMarkers && markers.length > 0 && (
-                    <div className="bg-neutral-900 rounded-lg p-4">
-                        <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-                            <MapPin className="w-4 h-4" />
-                            Active Markers
-                        </h3>
-                        <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
-                            {Array.from(new Set(markers.map(m => m.type))).map(type => {
-                                const count = markers.filter(m => m.type === type).length;
-                                return (
-                                    <div key={String(type)} className="flex items-center gap-2 text-xs">
-                                        <div
-                                            className="w-3 h-3 rounded-full"
-                                            style={{ backgroundColor: getMarkerColor(type) }}
-                                        />
-                                        <span className="text-neutral-300">
-                                            {getMarkerTypeName(type)} ({count})
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                )}
-
-                {showTeam && teamInfo.length > 0 && (
-                    <div className="bg-neutral-900 rounded-lg p-4">
-                        <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-                            <Users className="w-4 h-4" />
-                            Team Members
-                        </h3>
-                        <div className="space-y-1">
-                            {teamInfo.map((member, idx) => (
-                                <div key={idx} className="flex items-center gap-2 text-xs">
-                                    <div
-                                        className={`w-2 h-2 rounded-full ${member.isAlive ? 'bg-green-500' : 'bg-red-500'}`}
-                                    />
-                                    <span className={member.isAlive ? 'text-neutral-300' : 'text-neutral-500'}>
-                                        {member.name} {member.isOnline ? '(Online)' : '(Offline)'}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {/* Chat Overlay */}
-            <ChatOverlay serverId={serverId} userId={userId} />
-
-            {/* Shopping Sidebar */}
-            <MapSidebar
-                serverId={serverId}
-                onItemSearch={handleItemSearch}
-                onClearHighlights={handleClearHighlights}
-            />
 
             {/* Cluster Click Modal */}
             {clickedClusterId && (() => {

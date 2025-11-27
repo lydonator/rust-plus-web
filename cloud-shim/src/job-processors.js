@@ -93,6 +93,58 @@ async function processDynamicMarkersJob(job) {
 }
 
 /**
+ * Process player markers fetch job
+ * Fetches player positions every 10 seconds (slower than events)
+ */
+async function processPlayerMarkersJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching player markers for ${serverId}`);
+
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        await rustPlusManager.fetchAndEmitPlayerMarkers(serverId, rustPlus);
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch player markers for ${serverId}`, {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
+ * Process event markers fetch job  
+ * Fetches fast-moving events (cargo ship, helicopters) every 2 seconds
+ */
+async function processEventMarkersJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching event markers for ${serverId}`);
+
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        await rustPlusManager.fetchAndEmitEventMarkers(serverId, rustPlus);
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch event markers for ${serverId}`, {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
  * Process static markers fetch job
  * Fetches stationary markers (vending machines, explosions) every 30 seconds
  */
@@ -237,6 +289,14 @@ async function processJob(job) {
 
     if (job.name.startsWith('dynamic-markers-')) {
         return await processDynamicMarkersJob(job);
+    }
+
+    if (job.name.startsWith('player-markers-')) {
+        return await processPlayerMarkersJob(job);
+    }
+
+    if (job.name.startsWith('event-markers-')) {
+        return await processEventMarkersJob(job);
     }
 
     if (job.name.startsWith('static-markers-')) {

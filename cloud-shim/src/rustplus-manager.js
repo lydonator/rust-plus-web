@@ -14,6 +14,7 @@ class RustPlusManager {
         this.intentionalDisconnects = new Set(); // serverIds that were intentionally disconnected
         this.shoppingListAlerts = new Map(); // serverId -> Set of alerted item IDs to prevent spam
         this.queueManager = null; // BullMQ queue manager for job scheduling (Phase 3)
+        this.lastFailureLogTime = new Map(); // failureKey -> last log timestamp to throttle excessive logs
 
         // Listen for server deletions (Manual Removal from Frontend)
         const channel = supabase
@@ -230,6 +231,8 @@ class RustPlusManager {
         if (this.queueManager) {
             await this.queueManager.removeRepeatingJob('rustplus', `server-info-${serverId}`);
             await this.queueManager.removeRepeatingJob('rustplus', `dynamic-markers-${serverId}`);
+            await this.queueManager.removeRepeatingJob('rustplus', `player-markers-${serverId}`);
+            await this.queueManager.removeRepeatingJob('rustplus', `event-markers-${serverId}`);
             await this.queueManager.removeRepeatingJob('rustplus', `static-markers-${serverId}`);
             await this.queueManager.removeRepeatingJob('rustplus', `team-info-${serverId}`);
             console.log(`[RustPlus] Removed BullMQ jobs for server ${serverId}`);
@@ -665,23 +668,34 @@ class RustPlusManager {
                     // Emit SSE event with server info
                     this.emitToSSE(serverId, 'server_info_update', info);
                 } else {
-                    // ENHANCED LOGGING FOR UNPAIR DETECTION
-                    console.warn('[RustPlus] ═══ GETINFO FAILURE ═══');
-                    console.warn('[RustPlus] Server ID:', serverId);
-                    console.warn('[RustPlus] Has message:', !!message);
-                    console.warn('[RustPlus] Has response:', !!message?.response);
-                    console.warn('[RustPlus] Has response.info:', !!message?.response?.info);
-                    console.warn('[RustPlus] Has response.error:', !!message?.response?.error);
+                    // Track consecutive failures for this specific issue (don't spam logs on every failure)
+                    const failureKey = `getinfo_failure_${serverId}`;
+                    const lastLogTime = this.lastFailureLogTime?.get(failureKey) || 0;
+                    const now = Date.now();
+                    
+                    // Only log detailed failure info every 30 seconds max
+                    if ((now - lastLogTime) > 30000) {
+                        console.warn('[RustPlus] ═══ GETINFO FAILURE ═══');
+                        console.warn('[RustPlus] Server ID:', serverId);
+                        console.warn('[RustPlus] Has message:', !!message);
+                        console.warn('[RustPlus] Has response:', !!message?.response);
+                        console.warn('[RustPlus] Has response.info:', !!message?.response?.info);
+                        console.warn('[RustPlus] Has response.error:', !!message?.response?.error);
 
-                    if (message?.response?.error) {
-                        console.warn('[RustPlus] Error details:', JSON.stringify(message.response.error, null, 2));
+                        if (message?.response?.error) {
+                            console.warn('[RustPlus] Error details:', JSON.stringify(message.response.error, null, 2));
+                        }
+
+                        if (message?.response && !message.response.info) {
+                            console.warn('[RustPlus] Full response:', JSON.stringify(message.response, null, 2));
+                        }
+
+                        console.warn('[RustPlus] ═════════════════════');
+                        
+                        // Track when we last logged this failure
+                        if (!this.lastFailureLogTime) this.lastFailureLogTime = new Map();
+                        this.lastFailureLogTime.set(failureKey, now);
                     }
-
-                    if (message?.response && !message.response.info) {
-                        console.warn('[RustPlus] Full response:', JSON.stringify(message.response, null, 2));
-                    }
-
-                    console.warn('[RustPlus] ═════════════════════');
 
                     // Track consecutive failures
                     const currentFailures = (this.serverFailureCounts.get(serverId) || 0) + 1;
@@ -840,6 +854,63 @@ class RustPlusManager {
             });
         } catch (error) {
             console.error(`[RustPlus] Error fetching dynamic markers:`, error.message);
+        }
+    }
+
+    // Fetch PLAYER markers only (slower updates - players don't move that fast on the map)
+    fetchAndEmitPlayerMarkers(serverId, rustPlusInstance) {
+        const rustPlus = rustPlusInstance || this.activeConnections.get(serverId);
+        if (!rustPlus) return;
+
+        const ws = rustPlus.ws || rustPlus.websocket;
+        if (ws && ws.readyState !== 1) return;
+
+        try {
+            this.getMapMarkers(serverId, (message) => {
+                if (message && message.response && message.response.mapMarkers) {
+                    const allMarkers = message.response.mapMarkers.markers || [];
+                    
+                    const playerMarkers = allMarkers.filter(m =>
+                        m.type === 1 || m.type === 'Player'           // Players only
+                    );
+                    console.log(`[RustPlus] Filtered ${playerMarkers.length} player markers`);
+                    this.emitToSSE(serverId, 'player_markers_update', { markers: playerMarkers });
+                } else {
+                    console.warn(`[RustPlus] Player markers: No valid response from server ${serverId}`);
+                }
+            });
+        } catch (error) {
+            console.error(`[RustPlus] Error fetching player markers:`, error.message);
+        }
+    }
+
+    // Fetch EVENT markers only (fast updates - cargo ship, helicopters move quickly)
+    fetchAndEmitEventMarkers(serverId, rustPlusInstance) {
+        const rustPlus = rustPlusInstance || this.activeConnections.get(serverId);
+        if (!rustPlus) return;
+
+        const ws = rustPlus.ws || rustPlus.websocket;
+        if (ws && ws.readyState !== 1) return;
+
+        try {
+            this.getMapMarkers(serverId, (message) => {
+                if (message && message.response && message.response.mapMarkers) {
+                    const allMarkers = message.response.mapMarkers.markers || [];
+                    
+                    const eventMarkers = allMarkers.filter(m =>
+                        m.type === 4 || m.type === 'CH47' || m.type === 'Chinook' ||  // Chinook
+                        m.type === 5 || m.type === 'CargoShip' ||        // Cargo Ship  
+                        m.type === 8 || m.type === 'PatrolHelicopter'    // Patrol Helicopter
+                    );
+                    console.log(`[RustPlus] Filtered ${eventMarkers.length} event markers`);
+                    this.emitToSSE(serverId, 'event_markers_update', { markers: eventMarkers });
+                    this.trackMapEvents(serverId, eventMarkers);
+                } else {
+                    console.warn(`[RustPlus] Event markers: No valid response from server ${serverId}`);
+                }
+            });
+        } catch (error) {
+            console.error(`[RustPlus] Error fetching event markers:`, error.message);
         }
     }
 
@@ -1139,10 +1210,15 @@ class RustPlusManager {
             return this.setPollingIntervalsLegacy(serverId, rustPlus);
         }
 
+        // Ensure legacy intervals are cleared before setting up BullMQ jobs
+        this.clearLegacyIntervals(serverId);
+
         // Clear existing repeatable jobs for this server
         await this.queueManager.removeRepeatingJob('rustplus', `server-info-${serverId}`);
         await this.queueManager.removeRepeatingJob('rustplus', `map-data-${serverId}`); // Remove legacy job
         await this.queueManager.removeRepeatingJob('rustplus', `dynamic-markers-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `player-markers-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `event-markers-${serverId}`);
         await this.queueManager.removeRepeatingJob('rustplus', `static-markers-${serverId}`);
         await this.queueManager.removeRepeatingJob('rustplus', `team-info-${serverId}`);
 
@@ -1154,21 +1230,8 @@ class RustPlusManager {
             { pattern: '*/30 * * * * *' } // Every 30 seconds
         );
 
-        // DYNAMIC markers (players, events) - real-time updates every 2 seconds
-        await this.queueManager.scheduleRepeatingJob(
-            'rustplus',
-            `dynamic-markers-${serverId}`,
-            { serverId },
-            { pattern: '*/2 * * * * *' }
-        );
-
-        // STATIC markers (vending machines) - infrequent updates every 30 seconds
-        await this.queueManager.scheduleRepeatingJob(
-            'rustplus',
-            `static-markers-${serverId}`,
-            { serverId },
-            { pattern: '*/30 * * * * *' }
-        );
+        // NOTE: Dynamic and static markers polling is now started only when users visit the Map page
+        // This is handled by startMapPolling() method to save resources
 
         await this.queueManager.scheduleRepeatingJob(
             'rustplus',
@@ -1177,7 +1240,62 @@ class RustPlusManager {
             { pattern: '*/10 * * * * *' } // Every 10 seconds
         );
 
-        console.log(`[RustPlus] ✅ Scheduled BullMQ jobs for server ${serverId}`);
+        console.log(`[RustPlus] ✅ Scheduled BullMQ jobs for server ${serverId}:`)
+        console.log(`[RustPlus]   - Server info: every 30 seconds`)
+        console.log(`[RustPlus]   - Team info: every 10 seconds`)
+        console.log(`[RustPlus]   - Map polling: on-demand only`);
+    }
+
+    // Start map-specific polling (called when user opens map page)
+    async startMapPolling(serverId) {
+        if (!this.queueManager) {
+            console.warn('[RustPlus] Queue manager not set, cannot start map polling');
+            return;
+        }
+
+        console.log(`[RustPlus] 🗺️ Starting map polling for ${serverId}`);
+
+        // Start player markers polling (slower updates) - every 10 seconds
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `player-markers-${serverId}`,
+            { serverId },
+            { pattern: '*/10 * * * * *' }
+        );
+
+        // Start event markers polling (real-time events like Cargo, Heli) - every 5 seconds (reduced from 2s to reduce load)
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `event-markers-${serverId}`,
+            { serverId },
+            { pattern: '*/5 * * * * *' }
+        );
+
+        // Start static markers polling (vending machines) - every 30 seconds
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `static-markers-${serverId}`,
+            { serverId },
+            { pattern: '*/30 * * * * *' }
+        );
+
+        console.log(`[RustPlus] ✅ Map polling started for ${serverId}`);
+    }
+
+    // Stop map-specific polling (called when user leaves map page)
+    async stopMapPolling(serverId) {
+        if (!this.queueManager) {
+            console.warn('[RustPlus] Queue manager not set, cannot stop map polling');
+            return;
+        }
+
+        console.log(`[RustPlus] 🛑 Stopping map polling for ${serverId}`);
+
+        await this.queueManager.removeRepeatingJob('rustplus', `player-markers-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `event-markers-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `static-markers-${serverId}`);
+
+        console.log(`[RustPlus] ✅ Map polling stopped for ${serverId}`);
     }
 
     /**
@@ -1208,7 +1326,7 @@ class RustPlusManager {
 
             for (const job of repeatableJobs) {
                 // Check if job is server-specific
-                const match = job.name.match(/^(server-info|map-data|dynamic-markers|static-markers|team-info)-([0-9a-f-]+)$/);
+                const match = job.name.match(/^(server-info|map-data|dynamic-markers|player-markers|event-markers|static-markers|team-info)-([0-9a-f-]+)$/);
                 if (match) {
                     const serverId = match[2];
                     const hasActiveConnection = this.activeConnections.has(serverId);
@@ -1228,6 +1346,22 @@ class RustPlusManager {
             console.log(`[RustPlus] 🧹 Cleanup complete. Removed ${removedCount} orphaned jobs.`);
         } catch (err) {
             console.error('[RustPlus] Error during orphaned job cleanup:', err);
+        }
+    }
+
+    // Helper method to clear legacy setInterval timers
+    clearLegacyIntervals(serverId) {
+        if (this.serverInfoIntervals.has(serverId)) {
+            clearInterval(this.serverInfoIntervals.get(serverId));
+            this.serverInfoIntervals.delete(serverId);
+            console.log(`[RustPlus] Cleared legacy server info interval for ${serverId}`);
+        }
+        if (this.mapDataIntervals.has(serverId)) {
+            const intervals = this.mapDataIntervals.get(serverId);
+            clearInterval(intervals.markers);
+            clearInterval(intervals.team);
+            this.mapDataIntervals.delete(serverId);
+            console.log(`[RustPlus] Cleared legacy map data intervals for ${serverId}`);
         }
     }
 

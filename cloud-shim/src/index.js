@@ -863,6 +863,88 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Start Map Polling: POST /start-map-polling
+    if (req.method === 'POST' && req.url === '/start-map-polling') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { userId: rawUserId, serverId: rawServerId } = JSON.parse(body);
+
+                // Validate inputs
+                const userId = validateUserId(rawUserId);
+                const serverId = validateServerId(rawServerId);
+
+                if (!userId || !serverId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid or missing userId or serverId' }));
+                    return;
+                }
+
+                // Security Check
+                if (userId !== req.user.userId) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Forbidden' }));
+                    return;
+                }
+
+                console.log(`[Shim] 🗺️ Start map polling request: user ${userId} -> server ${serverId}`);
+
+                // Start map polling
+                await rustPlusManager.startMapPolling(serverId);
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (error) {
+                console.error('[Shim] Error starting map polling:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal server error' }));
+            }
+        });
+        return;
+    }
+
+    // Stop Map Polling: POST /stop-map-polling  
+    if (req.method === 'POST' && req.url === '/stop-map-polling') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+            try {
+                const { userId: rawUserId, serverId: rawServerId } = JSON.parse(body);
+
+                // Validate inputs
+                const userId = validateUserId(rawUserId);
+                const serverId = validateServerId(rawServerId);
+
+                if (!userId || !serverId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid or missing userId or serverId' }));
+                    return;
+                }
+
+                // Security Check
+                if (userId !== req.user.userId) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Forbidden' }));
+                    return;
+                }
+
+                console.log(`[Shim] 🛑 Stop map polling request: user ${userId} -> server ${serverId}`);
+
+                // Stop map polling
+                await rustPlusManager.stopMapPolling(serverId);
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (error) {
+                console.error('[Shim] Error stopping map polling:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal server error' }));
+            }
+        });
+        return;
+    }
+
     // Heartbeat: POST /heartbeat
     if (req.method === 'POST' && req.url === '/heartbeat') {
         let body = '';

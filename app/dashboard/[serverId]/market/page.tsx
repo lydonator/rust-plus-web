@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { TrendingUp, DollarSign, Package, ShoppingCart } from 'lucide-react';
 import rustItems from '@/lib/rust-items.json';
 import { useShimConnectionGuard } from '@/hooks/useShimConnection';
+import { useMapPolling } from '@/hooks/useMapPolling';
 
 interface RustItem {
     name: string;
@@ -42,6 +43,8 @@ export default function MarketPage() {
     const params = useParams();
     const serverId = params.serverId as string;
     const [userId, setUserId] = useState<string | null>(null);
+
+    // Market data comes from SSE events, no need for map polling
     const [markers, setMarkers] = useState<MapMarker[]>([]);
     const [activeTab, setActiveTab] = useState<TabType>('hot');
     const [converterAmount, setConverterAmount] = useState<number>(1000);

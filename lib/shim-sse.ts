@@ -10,11 +10,9 @@ class ShimSSEManager {
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 10; // Cap at 10 attempts (~15 mins with backoff)
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private connectingTimeout: ReturnType<typeof setTimeout> | null = null;
     
     private isConnecting = false; // Deprecated in favor of connectionState, but keeping for safety
-    private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-    private connectionWatchdogInterval: ReturnType<typeof setInterval> | null = null;
-    private lastMessageTime = 0;
 
     // Store handler references so we can remove them (Star Wars Easter Egg!)
     private handlers = {
@@ -30,6 +28,8 @@ class ShimSSEManager {
         message: this.handleR2D2.bind(this),
         server_info_update: this.handleC3PO.bind(this),
         map_markers_update: this.handleBobafett.bind(this),
+        dynamic_markers_update: this.handleGroguMoving.bind(this),
+        static_markers_update: this.handleMandalorianStatic.bind(this),
         team_info_update: this.handleLando.bind(this),
         team_message: this.handlePadme.bind(this),
         game_event: this.handleMaceWindu.bind(this),
@@ -47,13 +47,11 @@ class ShimSSEManager {
     private handleLukeSkywalker(event: any) {
         const data = JSON.parse(event.data);
         console.log('[ShimSSE] Connected event:', data);
-        this.lastMessageTime = Date.now();
     }
 
     private handleBB8(event: any) {
-        // Heartbeat received - connection is alive
+        // Heartbeat received - connection is alive (now handled by activity tracker)
         // console.log('[ShimSSE] Heartbeat (BB-8) received');
-        this.lastMessageTime = Date.now();
     }
 
     private handleHanSolo(event: any) {
@@ -120,6 +118,18 @@ class ShimSSEManager {
         const data = JSON.parse(event.data);
         console.log('[ShimSSE] Map Markers Update:', data);
         window.dispatchEvent(new CustomEvent('map_markers_update', { detail: data }));
+    }
+
+    private handleGroguMoving(event: any) {
+        const data = JSON.parse(event.data);
+        console.log('[ShimSSE] Dynamic Markers Update:', data);
+        window.dispatchEvent(new CustomEvent('dynamic_markers_update', { detail: data }));
+    }
+
+    private handleMandalorianStatic(event: any) {
+        const data = JSON.parse(event.data);
+        console.log('[ShimSSE] Static Markers Update:', data);
+        window.dispatchEvent(new CustomEvent('static_markers_update', { detail: data }));
     }
 
     private handleLando(event: any) {
@@ -211,6 +221,8 @@ class ShimSSEManager {
         this.eventSource.addEventListener('message', this.handlers.message);
         this.eventSource.addEventListener('server_info_update', this.handlers.server_info_update);
         this.eventSource.addEventListener('map_markers_update', this.handlers.map_markers_update);
+        this.eventSource.addEventListener('dynamic_markers_update', this.handlers.dynamic_markers_update);
+        this.eventSource.addEventListener('static_markers_update', this.handlers.static_markers_update);
         this.eventSource.addEventListener('team_info_update', this.handlers.team_info_update);
         this.eventSource.addEventListener('team_message', this.handlers.team_message);
         this.eventSource.addEventListener('game_event', this.handlers.game_event);
@@ -240,6 +252,8 @@ class ShimSSEManager {
         this.eventSource.removeEventListener('message', this.handlers.message);
         this.eventSource.removeEventListener('server_info_update', this.handlers.server_info_update);
         this.eventSource.removeEventListener('map_markers_update', this.handlers.map_markers_update);
+        this.eventSource.removeEventListener('dynamic_markers_update', this.handlers.dynamic_markers_update);
+        this.eventSource.removeEventListener('static_markers_update', this.handlers.static_markers_update);
         this.eventSource.removeEventListener('team_info_update', this.handlers.team_info_update);
         this.eventSource.removeEventListener('team_message', this.handlers.team_message);
         this.eventSource.removeEventListener('game_event', this.handlers.game_event);
@@ -277,7 +291,8 @@ class ShimSSEManager {
             return;
         }
 
-        const delay = Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempts));
+        // For stuck connections, try immediate reconnect first time
+        const delay = this.reconnectAttempts === 0 ? 1000 : Math.min(30000, 1000 * Math.pow(2, this.reconnectAttempts));
         console.log(`[ShimSSE] Reconnecting in ${delay}ms (Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
 
         this.reconnectTimer = setTimeout(() => {
@@ -292,6 +307,7 @@ class ShimSSEManager {
         // If already connected to this user, do nothing
         if (this.currentUserId === userId && this.connectionState === 'connected' && this.eventSource) {
             console.log('[ShimSSE] Already connected for user:', userId);
+            this.setupHeartbeatReconnectListener(); // Ensure listener is active
             return;
         }
 
@@ -307,16 +323,31 @@ class ShimSSEManager {
             this.reconnectTimer = null;
         }
 
+        // Set up heartbeat failure listener
+        this.setupHeartbeatReconnectListener();
+
         console.log('[ShimSSE] Creating SSE connection for user:', userId);
         this.updateState('connecting');
         this.currentUserId = userId;
         this.isConnecting = true; // Legacy flag
+
+        // Set up connection timeout to catch stuck connections
+        this.connectingTimeout = setTimeout(() => {
+            if (this.connectionState === 'connecting') {
+                console.error('[ShimSSE] Connection stuck in connecting state - forcing reconnect');
+                this.eventSource?.close();
+                this.eventSource = null;
+                this.connectingTimeout = null;
+                this.attemptReconnect();
+            }
+        }, 10000); // 10 second timeout for stuck connections
 
         // Create EventSource connection
         const url = this.token 
             ? `${SHIM_URL}/events/${userId}?token=${this.token}`
             : `${SHIM_URL}/events/${userId}`; // Fallback for legacy/dev
             
+        console.log('[ShimSSE] Connecting to:', url);
         this.eventSource = new EventSource(url);
 
         // Handle connection open
@@ -325,16 +356,17 @@ class ShimSSEManager {
             this.updateState('connected');
             this.reconnectAttempts = 0;
             this.isConnecting = false;
-            this.lastMessageTime = Date.now();
             
-            // Start connection watchdog
-            this.startConnectionWatchdog();
+            // Clear connecting timeout
+            if (this.connectingTimeout) {
+                clearTimeout(this.connectingTimeout);
+                this.connectingTimeout = null;
+            }
         };
 
-        // Handle generic messages
+        // Handle generic messages  
         this.eventSource.onmessage = (event) => {
             // console.log('[ShimSSE] Message:', event);
-            this.lastMessageTime = Date.now();
         };
 
         // Attach all event listeners
@@ -342,12 +374,18 @@ class ShimSSEManager {
 
         // Handle connection errors with retry logic
         this.eventSource.onerror = (error) => {
-            console.error('[ShimSSE] ❌ Connection error');
+            console.error('[ShimSSE] ❌ Connection error', error);
+            console.log('[ShimSSE] EventSource readyState:', this.eventSource?.readyState);
+            
+            // Clear connecting timeout
+            if (this.connectingTimeout) {
+                clearTimeout(this.connectingTimeout);
+                this.connectingTimeout = null;
+            }
             
             // Clean up current source
             this.eventSource?.close();
             this.eventSource = null;
-            this.stopConnectionWatchdog();
             this.isConnecting = false;
 
             // Attempt recovery
@@ -355,46 +393,38 @@ class ShimSSEManager {
         };
     }
 
-    private startHeartbeat(): void {
-        // Deprecated: Replaced by attemptReconnect with exponential backoff
-    }
-
-    private stopHeartbeat(): void {
-        // Deprecated
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = null;
+    // Simplified - heartbeat in activity tracker handles connection health
+    private heartbeatReconnectListener: ((event: Event) => void) | null = null;
+    
+    private setupHeartbeatReconnectListener(): void {
+        // Remove existing listener if any
+        if (this.heartbeatReconnectListener) {
+            window.removeEventListener('heartbeat_failure_reconnect', this.heartbeatReconnectListener);
         }
-    }
-
-    private startConnectionWatchdog(): void {
-        if (this.connectionWatchdogInterval) return;
-
-        console.log('[ShimSSE] Starting connection watchdog');
-        this.connectionWatchdogInterval = setInterval(() => {
-            if (!this.isConnected()) return;
-
-            const timeSinceLastMessage = Date.now() - this.lastMessageTime;
-            if (timeSinceLastMessage > 45000) { // 45s timeout (heartbeat is every 30s)
-                console.warn(`[ShimSSE] Connection watchdog timed out (${timeSinceLastMessage}ms). Reconnecting...`);
-                
-                this.eventSource?.close();
-                this.eventSource = null;
-                this.attemptReconnect();
-            }
-        }, 10000); // Check every 10s
-    }
-
-    private stopConnectionWatchdog(): void {
-        if (this.connectionWatchdogInterval) {
-            console.log('[ShimSSE] Stopping connection watchdog');
-            clearInterval(this.connectionWatchdogInterval);
-            this.connectionWatchdogInterval = null;
-        }
+        
+        // Create new listener
+        this.heartbeatReconnectListener = () => {
+            console.log('[ShimSSE] Heartbeat failure detected - forcing reconnect');
+            this.reconnect();
+        };
+        
+        window.addEventListener('heartbeat_failure_reconnect', this.heartbeatReconnectListener);
     }
 
     disconnect(clearUserId = true): void {
         console.log('[ShimSSE] Disconnecting', clearUserId ? '(clearing userId)' : '(preserving userId)');
+
+        // Clear connecting timeout
+        if (this.connectingTimeout) {
+            clearTimeout(this.connectingTimeout);
+            this.connectingTimeout = null;
+        }
+
+        // Remove heartbeat reconnect listener
+        if (this.heartbeatReconnectListener) {
+            window.removeEventListener('heartbeat_failure_reconnect', this.heartbeatReconnectListener);
+            this.heartbeatReconnectListener = null;
+        }
 
         if (this.eventSource) {
             // Remove all event listeners before closing
@@ -407,7 +437,6 @@ class ShimSSEManager {
             this.currentUserId = null;
         }
 
-        this.stopConnectionWatchdog();
         this.isConnecting = false;
     }
 
@@ -471,7 +500,22 @@ export async function sendShimCommand(userId: string, serverId: string, command:
     });
 
     if (!response.ok) {
-        throw new Error(`Command failed: ${response.statusText}`);
+        // Enhanced error handling for different status codes
+        if (response.status === 503) {
+            throw new Error('Server not connected. Please wait for the connection to establish and try again.');
+        } else if (response.status === 429) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`Rate limit exceeded. Please wait before trying again.${errorData.retryAfter ? ` Retry after: ${new Date(errorData.retryAfter).toLocaleTimeString()}` : ''}`);
+        } else if (response.status === 403) {
+            throw new Error('Unauthorized access to this server.');
+        } else if (response.status === 400) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`Invalid request: ${errorData.error || response.statusText}`);
+        } else if (response.status >= 500) {
+            throw new Error(`Server error (${response.status}). Please try again in a moment.`);
+        } else {
+            throw new Error(`Command failed: ${response.statusText}`);
+        }
     }
 
     return response.json();

@@ -20,7 +20,7 @@ export default function Dashboard() {
     const [showShimDisconnected, setShowShimDisconnected] = useState(false);
 
     // Use global server connection state
-    const { activeServerId, setActiveServerId } = useServerConnection();
+    const { activeServerId, setActiveServerId, setServerConnectionState, getServerConnectionState, isServerConnected, isServerConnecting } = useServerConnection();
 
     // Connect to Cloud Shim (global connection via provider)
     const { isConnected, lastNotification, disconnectReason, clearDisconnectReason, token } = useShimConnection();
@@ -116,6 +116,7 @@ export default function Dashboard() {
         if (!user?.userId) return;
 
         setConnectingServerId(serverId);
+        setServerConnectionState(serverId, 'connecting');
 
         try {
             const shimUrl = process.env.NEXT_PUBLIC_SHIM_URL || 'http://localhost:4000';
@@ -132,14 +133,25 @@ export default function Dashboard() {
 
             if (res.ok) {
                 setActiveServerId(serverId);
-                console.log(`[Dashboard] Connected to server ${serverId}`);
+                console.log(`[Dashboard] Initiating connection to server ${serverId}`);
+                // Note: Connection state will be set to 'connected' when server_connected event is received
             } else {
-                console.error('[Dashboard] Failed to connect to server');
-                alert('Failed to connect to server');
+                const errorText = await res.text();
+                console.error('[Dashboard] Failed to connect to server:', res.status, errorText);
+                setServerConnectionState(serverId, 'disconnected');
+                
+                let errorMessage = 'Failed to connect to server';
+                if (res.status === 503) {
+                    errorMessage = 'Cloud Shim is not available. Please try again in a moment.';
+                } else if (res.status >= 500) {
+                    errorMessage = 'Server error occurred. Please try again.';
+                }
+                alert(errorMessage);
             }
         } catch (error) {
             console.error('[Dashboard] Error connecting to server:', error);
-            alert('Error connecting to server');
+            setServerConnectionState(serverId, 'disconnected');
+            alert('Network error occurred. Please check your connection.');
         } finally {
             setConnectingServerId(null);
         }
@@ -161,6 +173,7 @@ export default function Dashboard() {
 
             if (res.ok) {
                 setActiveServerId(null);
+                setServerConnectionState(serverId, 'disconnected');
                 console.log(`[Dashboard] Disconnected from server ${serverId}`);
             } else {
                 console.error('[Dashboard] Failed to disconnect from server');
@@ -338,7 +351,10 @@ export default function Dashboard() {
                 ) : (
                     <div className="grid gap-4">
                         {servers.map(server => {
-                            const isConnected = activeServerId === server.id;
+                            const isActive = activeServerId === server.id;
+                            const connectionState = isActive ? getServerConnectionState(server.id) : 'disconnected';
+                            const isConnected = isActive && connectionState === 'connected';
+                            const isConnecting = connectionState === 'connecting';
                             const CardWrapper = isConnected ? Link : 'div';
                             const cardProps = isConnected
                                 ? { href: `/dashboard/${server.id}` }
@@ -358,13 +374,15 @@ export default function Dashboard() {
                                         <div>
                                             <h3 className={`font-bold text-lg transition-colors ${isConnected ? 'group-hover:text-rust-400' : ''}`}>
                                                 {server.server_info?.name || server.name}
-                                                {!isConnected && <span className="text-xs ml-2 text-zinc-500">(Disconnected)</span>}
+                                                {isConnecting && <span className="text-xs ml-2 text-yellow-500">(Connecting...)</span>}
+                                                {!isActive && <span className="text-xs ml-2 text-zinc-500">(Disconnected)</span>}
+                                                {isActive && !isConnected && !isConnecting && <span className="text-xs ml-2 text-orange-500">(Waiting for connection...)</span>}
                                             </h3>
                                             <p className="text-sm text-zinc-400">{server.ip}:{server.port}</p>
                                         </div>
                                         <div className="flex gap-2 items-center">
                                             {/* Connect/Disconnect Toggle */}
-                                            {activeServerId === server.id ? (
+                                            {isConnected ? (
                                                 <button
                                                     onClick={(e) => {
                                                         e.preventDefault();
@@ -376,6 +394,24 @@ export default function Dashboard() {
                                                 >
                                                     <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
                                                     Connected
+                                                </button>
+                                            ) : isConnecting ? (
+                                                <button
+                                                    disabled
+                                                    className="px-3 py-1 bg-yellow-900 text-yellow-200 text-xs rounded transition-colors flex items-center gap-1 cursor-not-allowed"
+                                                    title="Server is connecting..."
+                                                >
+                                                    <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
+                                                    Connecting...
+                                                </button>
+                                            ) : isActive ? (
+                                                <button
+                                                    disabled
+                                                    className="px-3 py-1 bg-orange-900 text-orange-200 text-xs rounded transition-colors flex items-center gap-1 cursor-not-allowed"
+                                                    title="Waiting for server connection to establish..."
+                                                >
+                                                    <div className="w-2 h-2 rounded-full bg-orange-400 animate-pulse"></div>
+                                                    Waiting...
                                                 </button>
                                             ) : (
                                                 <button

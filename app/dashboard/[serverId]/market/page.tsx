@@ -74,10 +74,13 @@ export default function MarketPage() {
             setMarkers(newMarkers || []);
         };
 
-        window.addEventListener('map_markers_update', handleMarkersUpdate);
+        // Market only cares about static markers (vending machines)
+        window.addEventListener('map_markers_update', handleMarkersUpdate); // Legacy fallback
+        window.addEventListener('static_markers_update', handleMarkersUpdate);
 
         return () => {
             window.removeEventListener('map_markers_update', handleMarkersUpdate);
+            window.removeEventListener('static_markers_update', handleMarkersUpdate);
         };
     }, [userId, serverId]);
 

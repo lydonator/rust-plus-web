@@ -39,6 +39,11 @@ export function ShimConnectionProvider({ children }: { children: ReactNode }) {
                             setToken(userData.token);
                         }
 
+                        // Notify other components about authentication
+                        window.dispatchEvent(new CustomEvent('user_authenticated', { 
+                            detail: userData 
+                        }));
+
                         // Create ONE global SSE connection
                         getShimSSE(userData.userId, userData.token);
                     }

@@ -243,18 +243,50 @@ export default function MapPage() {
 
         const handleMapMarkersUpdate = (event: Event) => {
             const customEvent = event as CustomEvent;
-            const { serverId: eventServerId, markers: newMarkers } = customEvent.detail;
-
-            if (eventServerId !== serverId) return;
-
-            console.log('[Map] 📍 Received map markers update via SSE');
+            const newMarkers = customEvent.detail?.markers;
+            console.log('[Map] Received markers update:', newMarkers?.length);
             setMarkers(newMarkers || []);
         };
 
-        window.addEventListener('map_markers_update', handleMapMarkersUpdate);
+        const handleDynamicMarkersUpdate = (event: Event) => {
+            const customEvent = event as CustomEvent;
+            const dynamicMarkers = customEvent.detail?.markers;
+            console.log('[Map] Received dynamic markers update:', dynamicMarkers?.length);
+            
+            // Update only dynamic markers, preserving static ones
+            setMarkers(prev => {
+                const staticMarkers = prev.filter(m => 
+                    m.type !== 'Player' && m.type !== 'CargoShip' &&
+                    m.type !== 'PatrolHelicopter' && m.type !== 'Chinook' && m.type !== 'CH47'
+                );
+                return [...staticMarkers, ...(dynamicMarkers || [])];
+            });
+        };
+
+        const handleStaticMarkersUpdate = (event: Event) => {
+            const customEvent = event as CustomEvent;
+            const staticMarkers = customEvent.detail?.markers;
+            console.log('[Map] Received static markers update:', staticMarkers?.length);
+            
+            // Update only static markers, preserving dynamic ones
+            setMarkers(prev => {
+                const dynamicMarkers = prev.filter(m => 
+                    m.type === 'Player' || m.type === 'CargoShip' ||
+                    m.type === 'PatrolHelicopter' || m.type === 'Chinook' || m.type === 'CH47'
+                );
+                return [...dynamicMarkers, ...(staticMarkers || [])];
+            });
+        };
+
+        // Listen for all marker update types
+        window.addEventListener('map_markers_update', handleMapMarkersUpdate); // Legacy fallback
+        window.addEventListener('dynamic_markers_update', handleDynamicMarkersUpdate);
+        window.addEventListener('static_markers_update', handleStaticMarkersUpdate);
 
         return () => {
             window.removeEventListener('map_markers_update', handleMapMarkersUpdate);
+            window.removeEventListener('dynamic_markers_update', handleDynamicMarkersUpdate);
+            window.removeEventListener('static_markers_update', handleStaticMarkersUpdate);
         };
     }, [userId, serverId]);
 

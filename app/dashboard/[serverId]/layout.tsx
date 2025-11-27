@@ -24,18 +24,23 @@ export default function ServerDashboardLayout({
     const pathname = usePathname();
     const params = useParams();
     const serverId = params.serverId as string;
-    const { activeServerId } = useServerConnection();
+    const { activeServerId, isServerConnected } = useServerConnection();
     const [isChecking, setIsChecking] = useState(true);
 
     // Check if server is connected - if not, redirect to dashboard
     useEffect(() => {
         if (serverId && activeServerId !== serverId) {
-            console.log(`[ServerLayout] Server ${serverId} is not connected (active: ${activeServerId}). Redirecting to dashboard...`);
+            console.log(`[ServerLayout] Server ${serverId} is not active (active: ${activeServerId}). Redirecting to dashboard...`);
             router.push('/dashboard');
-        } else {
+        } else if (serverId && activeServerId === serverId && !isServerConnected(serverId)) {
+            console.log(`[ServerLayout] Server ${serverId} is not connected yet. Waiting for connection...`);
+            // Don't redirect, just keep checking - will show loading state
+            setIsChecking(true);
+        } else if (serverId && activeServerId === serverId && isServerConnected(serverId)) {
+            console.log(`[ServerLayout] Server ${serverId} is connected. Proceeding to page...`);
             setIsChecking(false);
         }
-    }, [serverId, activeServerId, router]);
+    }, [serverId, activeServerId, isServerConnected, router]);
 
     // Track last viewed time
     useEffect(() => {
@@ -48,11 +53,22 @@ export default function ServerDashboardLayout({
 
     // Show loading while checking connection
     if (isChecking) {
+        const isWaitingForConnection = serverId && activeServerId === serverId && !isServerConnected(serverId);
         return (
             <div className="flex h-screen items-center justify-center bg-neutral-900 text-white">
                 <div className="text-center">
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-rust-500 mb-4"></div>
-                    <p className="text-neutral-400">Checking server connection...</p>
+                    <p className="text-neutral-400">
+                        {isWaitingForConnection 
+                            ? 'Waiting for server connection to establish...' 
+                            : 'Checking server connection...'
+                        }
+                    </p>
+                    {isWaitingForConnection && (
+                        <p className="text-neutral-500 text-sm mt-2">
+                            This usually takes a few seconds
+                        </p>
+                    )}
                 </div>
             </div>
         );

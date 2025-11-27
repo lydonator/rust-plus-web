@@ -67,6 +67,58 @@ async function processMapDataJob(job) {
 }
 
 /**
+ * Process dynamic markers fetch job
+ * Fetches moving markers (players, events) every 2 seconds
+ */
+async function processDynamicMarkersJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching dynamic markers for ${serverId}`);
+
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        await rustPlusManager.fetchAndEmitDynamicMarkers(serverId, rustPlus);
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch dynamic markers for ${serverId}`, {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
+ * Process static markers fetch job
+ * Fetches stationary markers (vending machines, explosions) every 30 seconds
+ */
+async function processStaticMarkersJob(job) {
+    const { serverId } = job.data;
+
+    try {
+        logger.debug('JobProcessor', `Fetching static markers for ${serverId}`);
+
+        const rustPlus = rustPlusManager.activeConnections.get(serverId);
+        if (!rustPlus) {
+            logger.warn('JobProcessor', `No active connection for server ${serverId}`);
+            return { success: false, reason: 'no_connection' };
+        }
+
+        await rustPlusManager.fetchAndEmitStaticMarkers(serverId, rustPlus);
+        return { success: true, serverId };
+    } catch (error) {
+        logger.error('JobProcessor', `Failed to fetch static markers for ${serverId}`, {
+            error: error.message
+        });
+        throw error;
+    }
+}
+
+/**
  * Process team info fetch job
  * Fetches team member information every 10 seconds
  */
@@ -183,8 +235,12 @@ async function processJob(job) {
         return await processServerInfoJob(job);
     }
 
-    if (job.name.startsWith('map-data-')) {
-        return await processMapDataJob(job);
+    if (job.name.startsWith('dynamic-markers-')) {
+        return await processDynamicMarkersJob(job);
+    }
+
+    if (job.name.startsWith('static-markers-')) {
+        return await processStaticMarkersJob(job);
     }
 
     if (job.name.startsWith('team-info-')) {
@@ -195,8 +251,11 @@ async function processJob(job) {
         case 'server-info':
             return await processServerInfoJob(job);
 
-        case 'map-data':
-            return await processMapDataJob(job);
+        case 'dynamic-markers':
+            return await processDynamicMarkersJob(job);
+
+        case 'static-markers':
+            return await processStaticMarkersJob(job);
 
         case 'team-info':
             return await processTeamInfoJob(job);

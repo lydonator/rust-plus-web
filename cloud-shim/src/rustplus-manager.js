@@ -229,7 +229,8 @@ class RustPlusManager {
         // Clean up BullMQ jobs if queue manager is available
         if (this.queueManager) {
             await this.queueManager.removeRepeatingJob('rustplus', `server-info-${serverId}`);
-            await this.queueManager.removeRepeatingJob('rustplus', `map-data-${serverId}`);
+            await this.queueManager.removeRepeatingJob('rustplus', `dynamic-markers-${serverId}`);
+            await this.queueManager.removeRepeatingJob('rustplus', `static-markers-${serverId}`);
             await this.queueManager.removeRepeatingJob('rustplus', `team-info-${serverId}`);
             console.log(`[RustPlus] Removed BullMQ jobs for server ${serverId}`);
         }
@@ -804,6 +805,56 @@ class RustPlusManager {
         }
     }
 
+    // Fetch DYNAMIC map markers (players, events) - real-time updates
+    fetchAndEmitDynamicMarkers(serverId, rustPlusInstance) {
+        const rustPlus = rustPlusInstance || this.activeConnections.get(serverId);
+        if (!rustPlus) return;
+
+        const ws = rustPlus.ws || rustPlus.websocket;
+        if (ws && ws.readyState !== 1) return;
+
+        try {
+            this.getMapMarkers(serverId, (message) => {
+                if (message && message.response && message.response.mapMarkers) {
+                    const allMarkers = message.response.mapMarkers.markers || [];
+                    const dynamicMarkers = allMarkers.filter(m =>
+                        m.type === 'Player' || m.type === 'CargoShip' ||
+                        m.type === 'PatrolHelicopter' || m.type === 'Chinook' || m.type === 'CH47'
+                    );
+                    this.emitToSSE(serverId, 'dynamic_markers_update', { markers: dynamicMarkers });
+                    this.trackMapEvents(serverId, dynamicMarkers);
+                }
+            });
+        } catch (error) {
+            console.error(`[RustPlus] Error fetching dynamic markers:`, error.message);
+        }
+    }
+
+    // Fetch STATIC map markers (vending machines, explosions) - infrequent updates
+    fetchAndEmitStaticMarkers(serverId, rustPlusInstance) {
+        const rustPlus = rustPlusInstance || this.activeConnections.get(serverId);
+        if (!rustPlus) return;
+
+        const ws = rustPlus.ws || rustPlus.websocket;
+        if (ws && ws.readyState !== 1) return;
+
+        try {
+            this.getMapMarkers(serverId, (message) => {
+                if (message && message.response && message.response.mapMarkers) {
+                    const allMarkers = message.response.mapMarkers.markers || [];
+                    const staticMarkers = allMarkers.filter(m =>
+                        m.type === 'VendingMachine' || m.type === 3 ||
+                        m.type === 'Explosion' || m.type === 'Crate'
+                    );
+                    this.emitToSSE(serverId, 'static_markers_update', { markers: staticMarkers });
+                    this.checkShoppingList(serverId, staticMarkers);
+                }
+            });
+        } catch (error) {
+            console.error(`[RustPlus] Error fetching static markers:`, error.message);
+        }
+    }
+
     // Track map events (Heli, Cargo, etc.)
     trackMapEvents(serverId, markers) {
         const previousMarkers = this.previousMarkers.get(serverId) || new Set();
@@ -1070,7 +1121,9 @@ class RustPlusManager {
 
         // Clear existing repeatable jobs for this server
         await this.queueManager.removeRepeatingJob('rustplus', `server-info-${serverId}`);
-        await this.queueManager.removeRepeatingJob('rustplus', `map-data-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `map-data-${serverId}`); // Remove legacy job
+        await this.queueManager.removeRepeatingJob('rustplus', `dynamic-markers-${serverId}`);
+        await this.queueManager.removeRepeatingJob('rustplus', `static-markers-${serverId}`);
         await this.queueManager.removeRepeatingJob('rustplus', `team-info-${serverId}`);
 
         // Schedule new repeatable jobs
@@ -1081,11 +1134,20 @@ class RustPlusManager {
             { pattern: '*/30 * * * * *' } // Every 30 seconds
         );
 
+        // DYNAMIC markers (players, events) - real-time updates every 2 seconds
         await this.queueManager.scheduleRepeatingJob(
             'rustplus',
-            `map-data-${serverId}`,
+            `dynamic-markers-${serverId}`,
             { serverId },
-            { pattern: '*/30 * * * * *' } // Every 30 seconds
+            { pattern: '*/2 * * * * *' }
+        );
+
+        // STATIC markers (vending machines) - infrequent updates every 30 seconds
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `static-markers-${serverId}`,
+            { serverId },
+            { pattern: '*/30 * * * * *' }
         );
 
         await this.queueManager.scheduleRepeatingJob(
@@ -1126,11 +1188,17 @@ class RustPlusManager {
 
             for (const job of repeatableJobs) {
                 // Check if job is server-specific
-                const match = job.name.match(/^(server-info|map-data|team-info)-([0-9a-f-]+)$/);
+                const match = job.name.match(/^(server-info|map-data|dynamic-markers|static-markers|team-info)-([0-9a-f-]+)$/);
                 if (match) {
                     const serverId = match[2];
+                    const hasActiveConnection = this.activeConnections.has(serverId);
+                    
                     if (!validServerIds.has(serverId)) {
-                        console.log(`[RustPlus] 🗑️ Removing orphaned job: ${job.name} (server ${serverId} not found)`);
+                        console.log(`[RustPlus] 🗑️ Removing orphaned job: ${job.name} (server ${serverId} not found in DB)`);
+                        await queue.removeRepeatableByKey(job.key);
+                        removedCount++;
+                    } else if (!hasActiveConnection) {
+                        console.log(`[RustPlus] 🗑️ Removing orphaned job: ${job.name} (server ${serverId} not connected)`);
                         await queue.removeRepeatableByKey(job.key);
                         removedCount++;
                     }

@@ -151,6 +151,26 @@ const server = http.createServer(async (req, res) => {
     // CORS Configuration
     // ========================================
 
+    // Helper function to get CORS headers
+    const getCorsHeaders = (origin) => {
+        const allowedOrigins = [
+            'https://app.rustplus.online',
+            'http://localhost:3000',
+            'http://127.0.0.1:3000'
+        ];
+        
+        const headers = {};
+        if (allowedOrigins.includes(origin)) {
+            headers['Access-Control-Allow-Origin'] = origin;
+            headers['Access-Control-Allow-Credentials'] = 'true';
+        } else if (origin) {
+            // Log unauthorized origin attempts
+            console.warn(`[Security] Blocked request from unauthorized origin: ${origin}`);
+        }
+        
+        return headers;
+    };
+
     // Whitelist only specific origins (no wildcards)
     const allowedOrigins = [
         'https://app.rustplus.online',
@@ -205,8 +225,8 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Rate limiting: 10 connections/minute per user to prevent spam
-        const rateLimit = await rateLimiter.checkLimit('sse_connect', userId, 10, 60000);
+        // Rate limiting: 30 connections/minute per user (allow for development/refresh cycles)
+        const rateLimit = await rateLimiter.checkLimit('sse_connect', userId, 30, 60000);
         if (!rateLimit.allowed) {
             console.warn(`[RateLimiter] SSE connection limit exceeded for user ${userId}`);
             res.writeHead(429, { 'Content-Type': 'application/json' });
@@ -396,12 +416,20 @@ const server = http.createServer(async (req, res) => {
 
         const activeServerId = await stateManager.getActiveServer(userId);
         
-        // Security Check
-        if (userId !== req.user.userId) {
-            res.writeHead(403, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Forbidden' }));
-            return;
-        }
+                // Security Check
+                if (userId !== req.user.userId) {
+                    const corsHeaders = {};
+                    if (allowedOrigins.includes(origin)) {
+                        corsHeaders['Access-Control-Allow-Origin'] = origin;
+                        corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+                    }
+                    res.writeHead(403, { 
+                        'Content-Type': 'application/json',
+                        ...corsHeaders
+                    });
+                    res.end(JSON.stringify({ error: 'Forbidden' }));
+                    return;
+                }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -847,7 +875,15 @@ const server = http.createServer(async (req, res) => {
                 const userId = validateUserId(rawUserId);
 
                 if (!userId) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    const corsHeaders = {};
+                    if (allowedOrigins.includes(origin)) {
+                        corsHeaders['Access-Control-Allow-Origin'] = origin;
+                        corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+                    }
+                    res.writeHead(400, { 
+                        'Content-Type': 'application/json',
+                        ...corsHeaders
+                    });
                     res.end(JSON.stringify({ error: 'Invalid or missing userId' }));
                     return;
                 }
@@ -867,9 +903,15 @@ const server = http.createServer(async (req, res) => {
 
                 if (!rateLimit.allowed) {
                     console.warn(`[RateLimiter] Rate limit exceeded for heartbeat:${userId}`);
+                    const corsHeaders = {};
+                    if (allowedOrigins.includes(origin)) {
+                        corsHeaders['Access-Control-Allow-Origin'] = origin;
+                        corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+                    }
                     res.writeHead(429, {
                         'Content-Type': 'application/json',
-                        'Retry-After': Math.ceil((rateLimit.resetAt - Date.now()) / 1000)
+                        'Retry-After': Math.ceil((rateLimit.resetAt - Date.now()) / 1000),
+                        ...corsHeaders
                     });
                     res.end(JSON.stringify({
                         error: 'Too Many Requests',
@@ -883,7 +925,15 @@ const server = http.createServer(async (req, res) => {
                 const hasActiveServer = await stateManager.getActiveServer(userId);
                 if (!hasActiveServer) {
                     // No active server, ignore heartbeat
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    const corsHeaders = {};
+                    if (allowedOrigins.includes(origin)) {
+                        corsHeaders['Access-Control-Allow-Origin'] = origin;
+                        corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+                    }
+                    res.writeHead(200, { 
+                        'Content-Type': 'application/json',
+                        ...corsHeaders
+                    });
                     res.end(JSON.stringify({ success: true, ignored: true }));
                     return;
                 }
@@ -904,11 +954,27 @@ const server = http.createServer(async (req, res) => {
                     }
                 }
 
-                res.writeHead(200, { 'Content-Type': 'application/json' });
+                const corsHeaders = {};
+                if (allowedOrigins.includes(origin)) {
+                    corsHeaders['Access-Control-Allow-Origin'] = origin;
+                    corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+                }
+                res.writeHead(200, { 
+                    'Content-Type': 'application/json',
+                    ...corsHeaders
+                });
                 res.end(JSON.stringify({ success: true }));
             } catch (error) {
                 console.error('[Heartbeat] Error:', error);
-                res.writeHead(500);
+                const corsHeaders = {};
+                if (allowedOrigins.includes(origin)) {
+                    corsHeaders['Access-Control-Allow-Origin'] = origin;
+                    corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+                }
+                res.writeHead(500, {
+                    'Content-Type': 'application/json',
+                    ...corsHeaders
+                });
                 res.end(JSON.stringify({ error: 'Internal server error' }));
             }
         });
@@ -1191,6 +1257,15 @@ server.listen(PORT, async () => {
 
     // Cleanup orphaned jobs from previous runs
     await rustPlusManager.cleanupOrphanedJobs();
+
+    // Clean up orphaned jobs on startup (jobs for servers that are no longer connected)
+    try {
+        console.log('[Startup] Cleaning up orphaned jobs...');
+        await rustPlusManager.cleanupOrphanedJobs();
+        console.log('[Startup] ✅ Orphaned jobs cleanup complete');
+    } catch (error) {
+        console.error('[Startup] Failed to cleanup orphaned jobs:', error);
+    }
 
     // Log available endpoints
     logger.info('Shim', `SSE endpoint: http://localhost:${PORT}/events/:userId`);

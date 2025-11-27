@@ -27,6 +27,16 @@ function authenticate(req) {
         }
     }
 
+    // 3. Check Cookie (for heartbeat and other requests)
+    if (!token && req.headers.cookie) {
+        const authCookie = req.headers.cookie
+            .split('; ')
+            .find(row => row.startsWith('auth-token='));
+        if (authCookie) {
+            token = authCookie.split('=')[1];
+        }
+    }
+
     if (!token) return null;
 
     try {

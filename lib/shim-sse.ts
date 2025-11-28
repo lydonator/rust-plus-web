@@ -11,7 +11,7 @@ class ShimSSEManager {
     private maxReconnectAttempts = 10; // Cap at 10 attempts (~15 mins with backoff)
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private connectingTimeout: ReturnType<typeof setTimeout> | null = null;
-    
+
     private isConnecting = false; // Deprecated in favor of connectionState, but keeping for safety
 
     // Store handler references so we can remove them (Star Wars Easter Egg!)
@@ -48,7 +48,7 @@ class ShimSSEManager {
         const data = JSON.parse(event.data);
         console.log('[ShimSSE] ✅ Connected');
         this.connectionState = 'connected';
-        
+
         // Clear any active servers when shim reconnects (after being down)
         // This forces users to manually reconnect, avoiding complex state management
         console.log('[ShimSSE] Clearing active servers on shim reconnection');
@@ -318,9 +318,9 @@ class ShimSSEManager {
     connect(userId: string, token?: string): void {
         if (token) this.token = token;
 
-        // If already connected to this user, do nothing
-        if (this.currentUserId === userId && this.connectionState === 'connected' && this.eventSource) {
-            console.log('[ShimSSE] Already connected for user:', userId);
+        // If already connected OR connecting to this user, do nothing
+        if (this.currentUserId === userId && (this.connectionState === 'connected' || this.connectionState === 'connecting') && this.eventSource) {
+            console.log('[ShimSSE] Already connected/connecting for user:', userId, 'State:', this.connectionState);
             this.setupHeartbeatReconnectListener(); // Ensure listener is active
             return;
         }
@@ -357,10 +357,10 @@ class ShimSSEManager {
         }, 10000); // 10 second timeout for stuck connections
 
         // Create EventSource connection
-        const url = this.token 
+        const url = this.token
             ? `${SHIM_URL}/events/${userId}?token=${this.token}`
             : `${SHIM_URL}/events/${userId}`; // Fallback for legacy/dev
-            
+
         console.log('[ShimSSE] Connecting to:', url);
         this.eventSource = new EventSource(url);
 
@@ -370,7 +370,7 @@ class ShimSSEManager {
             this.updateState('connected');
             this.reconnectAttempts = 0;
             this.isConnecting = false;
-            
+
             // Clear connecting timeout
             if (this.connectingTimeout) {
                 clearTimeout(this.connectingTimeout);
@@ -390,13 +390,13 @@ class ShimSSEManager {
         this.eventSource.onerror = (error) => {
             console.error('[ShimSSE] ❌ Connection error', error);
             console.log('[ShimSSE] EventSource readyState:', this.eventSource?.readyState);
-            
+
             // Clear connecting timeout
             if (this.connectingTimeout) {
                 clearTimeout(this.connectingTimeout);
                 this.connectingTimeout = null;
             }
-            
+
             // Clean up current source
             this.eventSource?.close();
             this.eventSource = null;
@@ -409,19 +409,19 @@ class ShimSSEManager {
 
     // Simplified - heartbeat in activity tracker handles connection health
     private heartbeatReconnectListener: ((event: Event) => void) | null = null;
-    
+
     private setupHeartbeatReconnectListener(): void {
         // Remove existing listener if any
         if (this.heartbeatReconnectListener) {
             window.removeEventListener('heartbeat_failure_reconnect', this.heartbeatReconnectListener);
         }
-        
+
         // Create new listener
         this.heartbeatReconnectListener = () => {
             console.log('[ShimSSE] Heartbeat failure detected - forcing reconnect');
             this.reconnect();
         };
-        
+
         window.addEventListener('heartbeat_failure_reconnect', this.heartbeatReconnectListener);
     }
 

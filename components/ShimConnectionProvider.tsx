@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { getShimSSE, sendShimCommand } from '@/lib/shim-sse';
 
 interface ShimConnectionContextType {
@@ -17,6 +18,7 @@ interface ShimConnectionContextType {
 const ShimConnectionContext = createContext<ShimConnectionContextType | undefined>(undefined);
 
 export function ShimConnectionProvider({ children }: { children: ReactNode }) {
+    const pathname = usePathname();
     const [userId, setUserId] = useState<string | null>(null);
     const [token, setToken] = useState<string | null>(null);
     const [isConnected, setIsConnected] = useState(false);
@@ -33,19 +35,25 @@ export function ShimConnectionProvider({ children }: { children: ReactNode }) {
                 if (res.ok) {
                     const userData = await res.json();
                     if (userData?.userId) {
-                        console.log('[ShimConnectionProvider] User authenticated, connecting SSE:', userData.userId);
+                        console.log('[ShimConnectionProvider] User authenticated:', userData.userId);
                         setUserId(userData.userId);
                         if (userData.token) {
                             setToken(userData.token);
                         }
 
                         // Notify other components about authentication
-                        window.dispatchEvent(new CustomEvent('user_authenticated', { 
-                            detail: userData 
+                        window.dispatchEvent(new CustomEvent('user_authenticated', {
+                            detail: userData
                         }));
 
-                        // Create ONE global SSE connection
-                        getShimSSE(userData.userId, userData.token);
+                        // Only initialize SSE on dashboard or admin pages to prevent duplicate connections
+                        const shouldConnectSSE = pathname.startsWith('/dashboard') || pathname.startsWith('/admin');
+                        if (shouldConnectSSE) {
+                            console.log('[ShimConnectionProvider] Initializing SSE connection for:', pathname);
+                            getShimSSE(userData.userId, userData.token);
+                        } else {
+                            console.log('[ShimConnectionProvider] Skipping SSE initialization (not on dashboard/admin):', pathname);
+                        }
                     }
                 }
             } catch (error) {
@@ -54,7 +62,7 @@ export function ShimConnectionProvider({ children }: { children: ReactNode }) {
         };
 
         initializeConnection();
-    }, []);
+    }, [pathname]);
 
     // Set up event listeners for SSE events
     useEffect(() => {

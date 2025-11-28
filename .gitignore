@@ -48,4 +48,9 @@ cloud-shim/.env.production
 next-env.d.ts
 node_modules
 
+.claude
+CLAUDE.md
+AGENTS.md
 NUL
+
+/supabase

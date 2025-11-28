@@ -48,7 +48,7 @@ cloud-shim/.env.production
 next-env.d.ts
 node_modules
 
-.claude
+/.claude
 CLAUDE.md
 AGENTS.md
 NUL

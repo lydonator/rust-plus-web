@@ -118,13 +118,14 @@ const server = http.createServer(async (req, res) => {
     // ========================================
     // Authentication Middleware
     // ========================================
-    
+
     // Skip auth for health check and preflight requests
-    if (req.method !== 'OPTIONS' && req.url !== '/health') {
+    const isHealthCheck = (req.method === 'GET' && req.url === '/heartbeat') || req.url === '/health';
+    if (req.method !== 'OPTIONS' && !isHealthCheck) {
         const authUser = authenticate(req);
         if (!authUser) {
             console.warn(`[Auth] Unauthorized access attempt: ${req.method} ${req.url}`);
-            res.writeHead(401, { 
+            res.writeHead(401, {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': req.headers.origin || 'https://app.rustplus.online',
                 'Access-Control-Allow-Credentials': 'true'
@@ -158,7 +159,7 @@ const server = http.createServer(async (req, res) => {
             'http://localhost:3000',
             'http://127.0.0.1:3000'
         ];
-        
+
         const headers = {};
         if (allowedOrigins.includes(origin)) {
             headers['Access-Control-Allow-Origin'] = origin;
@@ -167,7 +168,7 @@ const server = http.createServer(async (req, res) => {
             // Log unauthorized origin attempts
             console.warn(`[Security] Blocked request from unauthorized origin: ${origin}`);
         }
-        
+
         return headers;
     };
 
@@ -192,6 +193,8 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
 
     // Handle preflight requests
+
+    // Handle preflight requests
     if (req.method === 'OPTIONS') {
         res.writeHead(204); // No Content
         res.end();
@@ -200,8 +203,24 @@ const server = http.createServer(async (req, res) => {
 
     // Heartbeat Endpoint: GET /heartbeat
     if (req.method === 'GET' && req.url === '/heartbeat') {
+        const health = {
+            status: 'ok',
+            timestamp: Date.now(),
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+            connections: {
+                sse: sseClients.size,
+                total: server.getConnections ? await new Promise(r => server.getConnections((e, c) => r(c))) : 0
+            },
+            components: {
+                fcm: fcmManager.isListening ? 'connected' : 'disconnected',
+                redis: stateManager.redisClient?.status || 'unknown'
+            },
+            version: process.env.npm_package_version || '1.0.0'
+        };
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', timestamp: Date.now() }));
+        res.end(JSON.stringify(health));
         return;
     }
 
@@ -415,21 +434,21 @@ const server = http.createServer(async (req, res) => {
         }
 
         const activeServerId = await stateManager.getActiveServer(userId);
-        
-                // Security Check
-                if (userId !== req.user.userId) {
-                    const corsHeaders = {};
-                    if (allowedOrigins.includes(origin)) {
-                        corsHeaders['Access-Control-Allow-Origin'] = origin;
-                        corsHeaders['Access-Control-Allow-Credentials'] = 'true';
-                    }
-                    res.writeHead(403, { 
-                        'Content-Type': 'application/json',
-                        ...corsHeaders
-                    });
-                    res.end(JSON.stringify({ error: 'Forbidden' }));
-                    return;
-                }
+
+        // Security Check
+        if (userId !== req.user.userId) {
+            const corsHeaders = {};
+            if (allowedOrigins.includes(origin)) {
+                corsHeaders['Access-Control-Allow-Origin'] = origin;
+                corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+            }
+            res.writeHead(403, {
+                'Content-Type': 'application/json',
+                ...corsHeaders
+            });
+            res.end(JSON.stringify({ error: 'Forbidden' }));
+            return;
+        }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -962,7 +981,7 @@ const server = http.createServer(async (req, res) => {
                         corsHeaders['Access-Control-Allow-Origin'] = origin;
                         corsHeaders['Access-Control-Allow-Credentials'] = 'true';
                     }
-                    res.writeHead(400, { 
+                    res.writeHead(400, {
                         'Content-Type': 'application/json',
                         ...corsHeaders
                     });
@@ -1012,7 +1031,7 @@ const server = http.createServer(async (req, res) => {
                         corsHeaders['Access-Control-Allow-Origin'] = origin;
                         corsHeaders['Access-Control-Allow-Credentials'] = 'true';
                     }
-                    res.writeHead(200, { 
+                    res.writeHead(200, {
                         'Content-Type': 'application/json',
                         ...corsHeaders
                     });
@@ -1041,7 +1060,7 @@ const server = http.createServer(async (req, res) => {
                     corsHeaders['Access-Control-Allow-Origin'] = origin;
                     corsHeaders['Access-Control-Allow-Credentials'] = 'true';
                 }
-                res.writeHead(200, { 
+                res.writeHead(200, {
                     'Content-Type': 'application/json',
                     ...corsHeaders
                 });

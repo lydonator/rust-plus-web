@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
 
   // Allow dev origins for reverse proxy setup
-  allowedDevOrigins: ['app.rustplus.online', 'shim.rustplus.online'],
+  allowedDevOrigins: ['app.rustplus.online', 'shim.rustplus.online', 'status.rustplus.online'],
 
   // Security headers for production
   async headers() {

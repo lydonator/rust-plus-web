@@ -103,6 +103,11 @@ class FcmManager {
 
             // Return existing credentials so SSE can send fcm_status event on reconnect
             const credentials = await this.getOrRegisterCredentials(userId);
+
+            // CRITICAL FIX: Re-register with Facepunch on reconnect to ensure token is still active
+            console.log(`[FCM] Re-validating Facepunch registration on reconnect...`);
+            await this.registerWithFacepunch(userId, credentials);
+
             return credentials;
         }
 
@@ -144,10 +149,10 @@ class FcmManager {
 
     async registerWithFacepunch(userId, credentials) {
         try {
-            // Get user's Steam ID and existing expo token
+            // Get user's Steam ID, auth token, and existing expo token
             const { data: user, error } = await this.supabase
                 .from('users')
-                .select('steam_id, expo_push_token')
+                .select('steam_id, expo_push_token, rustplus_auth_token')
                 .eq('id', userId)
                 .maybeSingle();
 
@@ -156,37 +161,88 @@ class FcmManager {
                 return;
             }
 
-            // Check if we already have a valid expo token
-            if (user.expo_push_token) {
-                console.log(`[FCM] ✅ Found existing Expo token for user ${user.steam_id}, skipping registration`);
+            if (!user.rustplus_auth_token) {
+                console.error(`[FCM] User ${user.steam_id} has no Rust+ auth token. Cannot register with Facepunch.`);
                 return;
             }
 
-            console.log(`[FCM] Registering user ${user.steam_id} with Facepunch...`);
-
-            // Generate stable Device ID
+            // Generate stable Device ID for Facepunch (Unique per SteamID to avoid conflicts)
             const UUID_NAMESPACE = '1b671a64-40d5-491e-99b0-da01ff1f3341';
-            const deviceId = uuidv5(user.steam_id, UUID_NAMESPACE);
-            console.log(`[FCM] Generated stable deviceId: ${deviceId}`);
+            const facepunchDeviceId = uuidv5(`facepunch-${user.steam_id}`, UUID_NAMESPACE);
+            console.log(`[FCM] Generated unique Facepunch DeviceId: ${facepunchDeviceId}`);
 
-            // Get Expo Push Token
-            const expoPushToken = await this.getExpoPushToken(credentials.fcm.token, deviceId);
+            // Check if we already have a valid expo token
+            if (user.expo_push_token) {
+                console.log(`[FCM] ✅ Found existing Expo token for user ${user.steam_id}`);
+                console.log(`[FCM] 🔄 Re-registering Expo token with Facepunch to ensure it's active...`);
+
+                try {
+                    await axios.post(
+                        'https://companion-rust.facepunch.com/api/push/register',
+                        {
+                            AuthToken: user.rustplus_auth_token,
+                            DeviceId: facepunchDeviceId,
+                            PushKind: 0,
+                            PushToken: user.expo_push_token
+                        },
+                        { headers: { 'Content-Type': 'application/json' } }
+                    );
+
+                    console.log(`[FCM] ✅ Successfully registered Expo token with Facepunch for ${user.steam_id}`);
+                    return;
+                } catch (regError) {
+                    console.error(`[FCM] ❌ Failed to re-register with Facepunch:`, regError.response?.data || regError.message);
+                    console.log(`[FCM] Will attempt to generate new Expo token...`);
+                    // Fall through to generate new token
+                }
+            }
+
+            console.log(`[FCM] Generating new Expo token for user ${user.steam_id}...`);
+
+            // Generate stable Device ID for Expo
+            const expoDeviceId = uuidv5(user.steam_id, UUID_NAMESPACE);
+            console.log(`[FCM] Generated stable Expo deviceId: ${expoDeviceId}`);
+
+            // Get Expo Push Token from Expo's API
+            const expoPushToken = await this.getExpoPushToken(credentials.fcm.token, expoDeviceId);
             console.log(`[FCM] Got Expo Push Token: ${expoPushToken}`);
 
-            // Save to Supabase
-            const { error: updateError } = await this.supabase
-                .from('users')
-                .update({ expo_push_token: expoPushToken })
-                .eq('id', userId);
+            // Register with Facepunch
+            console.log(`[FCM] 🔄 Registering new Expo token with Facepunch...`);
 
-            if (updateError) {
-                console.error(`[FCM] Error saving Expo token:`, updateError);
-            } else {
-                console.log(`[FCM] ✅ Saved Expo token for user ${user.steam_id}`);
+            try {
+                await axios.post(
+                    'https://companion-rust.facepunch.com/api/push/register',
+                    {
+                        AuthToken: user.rustplus_auth_token,
+                        DeviceId: facepunchDeviceId,
+                        PushKind: 0,
+                        PushToken: expoPushToken
+                    },
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+
+                console.log(`[FCM] ✅ Successfully registered new Expo token with Facepunch for ${user.steam_id}`);
+
+                // Save to Supabase only after successful Facepunch registration
+                const { error: updateError } = await this.supabase
+                    .from('users')
+                    .update({ expo_push_token: expoPushToken })
+                    .eq('id', userId);
+
+                if (updateError) {
+                    console.error(`[FCM] Error saving Expo token to DB:`, updateError);
+                } else {
+                    console.log(`[FCM] ✅ Saved Expo token to database for user ${user.steam_id}`);
+                }
+
+            } catch (regError) {
+                console.error(`[FCM] ❌ Failed to register new Expo token with Facepunch:`, regError.response?.data || regError.message);
+                throw regError;
             }
 
         } catch (err) {
-            console.error(`[FCM] Error registering with Facepunch:`, err);
+            console.error(`[FCM] Error in registerWithFacepunch:`, err);
         }
     }
 
@@ -255,23 +311,15 @@ class FcmManager {
                 Object.assign(parsedData, data);
             }
 
-            // Debug: Raw FCM data (disabled to reduce console noise)
-            // console.log(`[FCM] 📦 RAW DATA:`, JSON.stringify(parsedData, null, 2));
-
             // Parse the body JSON
             let body = {};
             if (parsedData.body) {
                 try {
                     body = JSON.parse(parsedData.body);
-                    // Verbose body logging disabled to reduce console noise
-                    // console.log(`[FCM] 📦 PARSED BODY:`, JSON.stringify(body, null, 2));
                 } catch (e) {
                     console.error('[FCM] Error parsing body JSON:', e);
                 }
             }
-
-            // Verbose type logging disabled to reduce console noise
-            // console.log(`[FCM] Notification type: ${body.type || 'device'}, entity: ${body.entityId || 'N/A'}`);
 
             const notification = { ...parsedData, data: body };
 
@@ -365,24 +413,16 @@ class FcmManager {
                             console.log('[FCM] ✅ Device saved:', deviceData);
 
                             // Trigger onDevicePaired callback
-                            console.log('[FCM] 🔍 Checking for onDevicePaired callback, userId:', userId);
-                            console.log('[FCM] 🔍 activeListeners.has(userId):', this.activeListeners.has(userId));
                             if (this.activeListeners.has(userId)) {
                                 const { onDevicePaired } = this.activeListeners.get(userId);
-                                console.log('[FCM] 🔍 onDevicePaired exists:', !!onDevicePaired);
                                 if (onDevicePaired) {
-                                    console.log('[FCM] 🚀 Calling onDevicePaired callback for serverId:', server.id, 'entityId:', deviceData.entity_id);
                                     onDevicePaired({
                                         type: 'device_paired',
                                         serverId: server.id,
                                         entityId: deviceData.entity_id,
                                         deviceData
                                     });
-                                } else {
-                                    console.error('[FCM] ❌ onDevicePaired callback is undefined/null');
                                 }
-                            } else {
-                                console.error('[FCM] ❌ No active listener found for userId:', userId);
                             }
                         }
                     } else {
@@ -412,7 +452,7 @@ class FcmManager {
                 this.activeListeners.delete(userId);
                 console.log(`[FCM] Stopped listening for user ${userId}`);
             } catch (error) {
-                console.error(`[FCM] Error stopping listener for ${userId}:`, error);
+                console.error(`[FCM] Error stopping listener for ${userId}: `, error);
                 this.activeListeners.delete(userId);
             }
         }

@@ -1,272 +1,367 @@
 {
-  "width": 3825,
-  "height": 3825,
+  "width": 2749,
+  "height": 2749,
   "oceanMargin": 500,
   "monuments": [
     {
-      "token": "ferryterminal",
-      "x": 5207.21142578125,
-      "y": 2390.1416015625
+      "token": "harbor_2_display_name",
+      "x": 3087.40966796875,
+      "y": 412.822998046875
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 5189,
-      "y": 2399
+      "x": 3048.5,
+      "y": 438.5
     },
     {
       "token": "harbor_display_name",
-      "x": 482.517822265625,
-      "y": 1082.484619140625
+      "x": 2954.412353515625,
+      "y": 3134.44775390625
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 497,
-      "y": 1181
+      "x": 3009.5,
+      "y": 3051.5
     },
     {
-      "token": "harbor_2_display_name",
-      "x": 5238.77978515625,
-      "y": 982.687744140625
+      "token": "ferryterminal",
+      "x": 1240.2933349609375,
+      "y": 313.84814453125
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 5201,
-      "y": 1010
+      "x": 1260.5,
+      "y": 312.5
+    },
+    {
+      "token": "fishing_village_display_name",
+      "x": 110.906982421875,
+      "y": 2601.14208984375
     },
     {
       "token": "large_fishing_village_display_name",
-      "x": 5347.197265625,
-      "y": 3462.12841796875
+      "x": 1426.54638671875,
+      "y": 3207.6474609375
     },
     {
       "token": "fishing_village_display_name",
-      "x": 2679.257568359375,
-      "y": 266.301513671875
-    },
-    {
-      "token": "fishing_village_display_name",
-      "x": 1765.8206787109375,
-      "y": 256.640869140625
+      "x": 2062.715576171875,
+      "y": 330.717529296875
     },
     {
       "token": "AbandonedMilitaryBase",
-      "x": 5173.50244140625,
-      "y": 2171.0673828125
+      "x": 2160.15478515625,
+      "y": 681.0120849609375
     },
     {
       "token": "arctic_base_a",
-      "x": 2034.830322265625,
-      "y": 4730.173828125
-    },
-    {
-      "token": "launchsite",
-      "x": 2338.727294921875,
-      "y": 4470.7392578125
-    },
-    {
-      "token": "train_tunnel_display_name",
-      "x": 2162,
-      "y": 4370
-    },
-    {
-      "token": "bandit_camp",
-      "x": 1635.36865234375,
-      "y": 1840.197021484375
+      "x": 998.469970703125,
+      "y": 2846.3037109375
     },
     {
       "token": "outpost",
-      "x": 4622.94140625,
-      "y": 3301.767578125
+      "x": 1753.045166015625,
+      "y": 1750.9423828125
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 4715,
-      "y": 3257
-    },
-    {
-      "token": "missile_silo_monument",
-      "x": 4489.4130859375,
-      "y": 5202.4921875
-    },
-    {
-      "token": "excavator",
-      "x": 4722.8798828125,
-      "y": 2367.699951171875
-    },
-    {
-      "token": "train_tunnel_display_name",
-      "x": 4640,
-      "y": 2315
-    },
-    {
-      "token": "junkyard_display_name",
-      "x": 2316.9091796875,
-      "y": 747.880615234375
-    },
-    {
-      "token": "stables_a",
-      "x": 3321.777587890625,
-      "y": 587.325439453125
-    },
-    {
-      "token": "power_plant_display_name",
-      "x": 4037.86083984375,
-      "y": 4671.734375
-    },
-    {
-      "token": "train_tunnel_display_name",
-      "x": 3965,
-      "y": 4718
-    },
-    {
-      "token": "water_treatment_plant_display_name",
-      "x": 1025.5570068359375,
-      "y": 3235.917236328125
-    },
-    {
-      "token": "train_tunnel_display_name",
-      "x": 1013,
-      "y": 3374
-    },
-    {
-      "token": "military_tunnels_display_name",
-      "x": 5027.486328125,
-      "y": 3856.48828125
-    },
-    {
-      "token": "train_tunnel_display_name",
-      "x": 4994,
-      "y": 3941
-    },
-    {
-      "token": "train_yard_display_name",
-      "x": 1188.7451171875,
-      "y": 2074.446044921875
-    },
-    {
-      "token": "train_tunnel_display_name",
-      "x": 1118,
-      "y": 2078
+      "x": 1701.5,
+      "y": 1662.5
     },
     {
       "token": "airfield_display_name",
-      "x": 1092.9737548828125,
-      "y": 2637.083984375
+      "x": 2877.073486328125,
+      "y": 2227.201171875
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 917,
-      "y": 2591
+      "x": 2733.5,
+      "y": 2115.5
     },
     {
-      "token": "sewer_display_name",
-      "x": 638.49169921875,
-      "y": 2577.42724609375
+      "token": "excavator",
+      "x": 788.3800048828125,
+      "y": 662.199951171875
     },
     {
-      "token": "mining_quarry_hqm_display_name",
-      "x": 4979.52392578125,
-      "y": 4877.7080078125
+      "token": "train_tunnel_display_name",
+      "x": 705.5,
+      "y": 609.5
     },
     {
-      "token": "mining_quarry_sulfur_display_name",
-      "x": 492.352783203125,
-      "y": 4381.40283203125
+      "token": "launchsite",
+      "x": 1632.863525390625,
+      "y": 2463.522705078125
     },
     {
-      "token": "dome_monument_name",
-      "x": 669.573486328125,
-      "y": 1907.3349609375
+      "token": "train_tunnel_display_name",
+      "x": 1773.5,
+      "y": 2610.5
     },
     {
-      "token": "mining_quarry_stone_display_name",
-      "x": 629.332763671875,
-      "y": 4049.894287109375
+      "token": "power_plant_display_name",
+      "x": 992.7474365234375,
+      "y": 2455.624755859375
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 978.5,
+      "y": 2370.5
+    },
+    {
+      "token": "water_treatment_plant_display_name",
+      "x": 2496.1982421875,
+      "y": 670.126220703125
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 2493.5,
+      "y": 531.5
+    },
+    {
+      "token": "military_tunnels_display_name",
+      "x": 2207.03857421875,
+      "y": 1472.414306640625
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 2229.5,
+      "y": 1560.5
+    },
+    {
+      "token": "train_yard_display_name",
+      "x": 1142.143310546875,
+      "y": 1587.419921875
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 1158.5,
+      "y": 1518.5
+    },
+    {
+      "token": "missile_silo_monument",
+      "x": 432.1988525390625,
+      "y": 853.0300903320312
     },
     {
       "token": "satellite_dish_display_name",
-      "x": 4728.2802734375,
-      "y": 1867.9163818359375
+      "x": 2305.621337890625,
+      "y": 2803.44775390625
+    },
+    {
+      "token": "dome_monument_name",
+      "x": 1508.044189453125,
+      "y": 462.0267333984375
+    },
+    {
+      "token": "stables_a",
+      "x": 355.2650146484375,
+      "y": 2459.08447265625
+    },
+    {
+      "token": "sewer_display_name",
+      "x": 2887.97216796875,
+      "y": 638.4010009765625
+    },
+    {
+      "token": "mining_quarry_sulfur_display_name",
+      "x": 3084.4208984375,
+      "y": 1183.345458984375
+    },
+    {
+      "token": "mining_quarry_hqm_display_name",
+      "x": 373.2391357421875,
+      "y": 1120.5572509765625
+    },
+    {
+      "token": "mining_quarry_stone_display_name",
+      "x": 1467.4105224609375,
+      "y": 1709.1334228515625
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 1124,
-      "y": 5051
+      "x": 1548.5,
+      "y": 1062.5
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 1397,
-      "y": 359
+      "x": 522.5,
+      "y": 3057.5
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 4646,
-      "y": 821
+      "x": 2487.5,
+      "y": 2826.5
     },
     {
       "token": "train_tunnel_display_name",
-      "x": 383,
-      "y": 4280
+      "x": 3033.5,
+      "y": 1302.5
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 228.5,
+      "y": 1659.5
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 1401.5,
+      "y": 3009.5
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 2091.5,
+      "y": 2124.5
+    },
+    {
+      "token": "train_tunnel_display_name",
+      "x": 756.5,
+      "y": 1152.5
     },
     {
       "token": "train_tunnel_link_display_name",
-      "x": 1061,
-      "y": 1637
-    },
-    {
-      "token": "train_tunnel_link_display_name",
-      "x": 4445,
-      "y": 4229
-    },
-    {
-      "token": "swamp_c",
-      "x": 760.604736328125,
-      "y": 1526.53125
-    },
-    {
-      "token": "mining_outpost_display_name",
-      "x": 537.53515625,
-      "y": 1323.364990234375
+      "x": 1425.5,
+      "y": 1353.5
     },
     {
       "token": "supermarket",
-      "x": 4676.13427734375,
-      "y": 4535.54296875
+      "x": 1437.4483642578125,
+      "y": 2177.6796875
+    },
+    {
+      "token": "mining_outpost_display_name",
+      "x": 1247.8995361328125,
+      "y": 543.66845703125
+    },
+    {
+      "token": "mining_outpost_display_name",
+      "x": 2984.3154296875,
+      "y": 1751.292724609375
     },
     {
       "token": "gas_station",
-      "x": 2821.660888671875,
-      "y": 4539.85986328125
+      "x": 2045.624267578125,
+      "y": 867.7744140625
+    },
+    {
+      "token": "supermarket",
+      "x": 2042.794189453125,
+      "y": 2375.512939453125
+    },
+    {
+      "token": "gas_station",
+      "x": 1743.3880615234375,
+      "y": 1484.3963623046875
+    },
+    {
+      "token": "supermarket",
+      "x": 2826.76123046875,
+      "y": 1043.580810546875
+    },
+    {
+      "token": "radtown",
+      "x": 2369.18603515625,
+      "y": 1725.134765625
+    },
+    {
+      "token": "gas_station",
+      "x": 398.061767578125,
+      "y": 1646.277099609375
+    },
+    {
+      "token": "mining_outpost_display_name",
+      "x": 808.9868774414062,
+      "y": 1002.2238159179688
     },
     {
       "token": "underwater_lab",
-      "x": 5317.0302734375,
-      "y": 5369.4052734375
+      "x": 1033.74658203125,
+      "y": 3387.011962890625
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/monument/underwater_lab/underwater_lab_b.prefab",
+      "x": 1033.74658203125,
+      "y": 3387.011962890625
+    },
+    {
+      "token": "underwater_lab",
+      "x": 113.0079345703125,
+      "y": 240.3712158203125
     },
     {
       "token": "assets/bundled/prefabs/autospawn/monument/underwater_lab/underwater_lab_a.prefab",
-      "x": 5317.0302734375,
-      "y": 5369.4052734375
+      "x": 113.0079345703125,
+      "y": 240.3712158203125
+    },
+    {
+      "token": "underwater_lab",
+      "x": 3391.453125,
+      "y": 1443.7845458984375
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/monument/underwater_lab/underwater_lab_c.prefab",
+      "x": 3391.453125,
+      "y": 1443.7845458984375
+    },
+    {
+      "token": "underwater_lab",
+      "x": 3237.41455078125,
+      "y": 3486.17236328125
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/monument/underwater_lab/underwater_lab_c.prefab",
+      "x": 3237.41455078125,
+      "y": 3486.17236328125
     },
     {
       "token": "assets/bundled/prefabs/autospawn/underwater-lab-base/module_900x900_2way_moonpool.prefab",
-      "x": 5323.94091796875,
-      "y": 5395.1826171875
+      "x": 1016.9288940429688,
+      "y": 3438.343505859375
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/underwater-lab-base/module_900x900_2way_moonpool.prefab",
+      "x": 136.289794921875,
+      "y": 212.8720703125
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/underwater-lab-base/module_900x900_2way_moonpool.prefab",
+      "x": 3401.565673828125,
+      "y": 1510.271484375
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/underwater-lab-base/module_900x900_2way_moonpool.prefab",
+      "x": 3351.570556640625,
+      "y": 1460.6099853515625
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/underwater-lab-base/module_900x900_2way_moonpool.prefab",
+      "x": 3282.91845703125,
+      "y": 3506.1689453125
+    },
+    {
+      "token": "assets/bundled/prefabs/autospawn/underwater-lab-base/module_900x900_2way_moonpool.prefab",
+      "x": 3248.261474609375,
+      "y": 3524.61181640625
     },
     {
       "token": "large_oil_rig",
-      "x": 5965.8212890625,
-      "y": 4760.1279296875
+      "x": 1749.5,
+      "y": 3820.0673828125
     },
     {
       "token": "oil_rig_small",
-      "x": 2843.199951171875,
-      "y": 5985.2734375
+      "x": 1749.5,
+      "y": -350
     },
     {
       "token": "lighthouse_display_name",
-      "x": 1953.607177734375,
-      "y": 679.328125
+      "x": 230.7794189453125,
+      "y": 2297.4970703125
+    },
+    {
+      "token": "lighthouse_display_name",
+      "x": 628.2239990234375,
+      "y": 339.48095703125
     }
   ],
   "background": "#0B3B4A"

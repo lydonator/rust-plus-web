@@ -16,7 +16,7 @@ const ANDROID_PACKAGE_CERT = config.RUSTPLUS_ANDROID_CERT;
 class FcmManager {
     constructor() {
         this.supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-        this.activeListeners = new Map(); // userId -> { client, onNotification, onDevicePaired }
+        this.activeListeners = new Map(); // userId -> { client, onNotification, onDevicePaired, lastNotificationReceived, notificationHistory, registrationLog }
         this.processedNotifications = new Map(); // persistentId -> timestamp (for deduplication)
         this.cleanupInterval = setInterval(() => this.cleanupOldNotifications(), 60000); // Clean every minute
     }
@@ -120,21 +120,61 @@ class FcmManager {
             const client = new PushReceiverClient(androidId, securityToken, []);
 
             client.on('ON_DATA_RECEIVED', async (data) => {
+                // Update last notification received timestamp and add to history
+                if (this.activeListeners.has(userId)) {
+                    const listener = this.activeListeners.get(userId);
+                    listener.lastNotificationReceived = Date.now();
+
+                    const notificationRecord = {
+                        type: 'ON_DATA_RECEIVED',
+                        timestamp: Date.now(),
+                        data: data
+                    };
+
+                    // Add to history, keep last 10
+                    listener.notificationHistory.unshift(notificationRecord);
+                    if (listener.notificationHistory.length > 10) {
+                        listener.notificationHistory.pop();
+                    }
+                }
                 await this.handleNotification(userId, data);
             });
 
             client.on('ON_NOTIFICATION_RECEIVED', (notification) => {
                 console.log(`[FCM] 🔔 NOTIFICATION RECEIVED for user ${userId}:`, notification);
+                // Update last notification received timestamp and add to history
                 if (this.activeListeners.has(userId)) {
-                    const { onNotification } = this.activeListeners.get(userId);
-                    if (onNotification) onNotification(notification);
+                    const listener = this.activeListeners.get(userId);
+                    listener.lastNotificationReceived = Date.now();
+
+                    const notificationRecord = {
+                        type: 'ON_NOTIFICATION_RECEIVED',
+                        timestamp: Date.now(),
+                        notification: notification
+                    };
+
+                    // Add to history, keep last 10
+                    listener.notificationHistory.unshift(notificationRecord);
+                    if (listener.notificationHistory.length > 10) {
+                        listener.notificationHistory.pop();
+                    }
+
+                    if (listener.onNotification) listener.onNotification(notification);
                 }
             });
 
             await client.connect();
             console.log(`[FCM] ✅ FCM Client CONNECTED for user ${userId}`);
 
-            this.activeListeners.set(userId, { client, onNotification, onDevicePaired, onServerPaired });
+            this.activeListeners.set(userId, {
+                client,
+                onNotification,
+                onDevicePaired,
+                onServerPaired,
+                lastNotificationReceived: null,
+                notificationHistory: [],
+                registrationLog: []
+            });
 
             // Register with Facepunch
             await this.registerWithFacepunch(userId, credentials);
@@ -147,8 +187,41 @@ class FcmManager {
         }
     }
 
+    logRegistration(userId, step, data) {
+        const logEntry = {
+            timestamp: Date.now(),
+            step,
+            data
+        };
+
+        console.log(`[FCM Registration] ${step}:`, data);
+
+        if (this.activeListeners.has(userId)) {
+            const listener = this.activeListeners.get(userId);
+
+            // If this is step 1 (start of new registration flow), clear previous log
+            if (step.startsWith('1.')) {
+                listener.registrationLog = [];
+            }
+
+            listener.registrationLog.push(logEntry);
+
+            // Keep only last complete flow (steps 1-10 or ERROR steps)
+            // Max ~10 steps per flow, so cap at 15 to be safe
+            if (listener.registrationLog.length > 15) {
+                listener.registrationLog.shift();
+            }
+        }
+    }
+
     async registerWithFacepunch(userId, credentials) {
         try {
+            this.logRegistration(userId, '1. Starting Facepunch Registration', {
+                hasCredentials: !!credentials,
+                androidId: credentials?.gcm?.androidId,
+                fcmToken: credentials?.fcm?.token?.substring(0, 30) + '...'
+            });
+
             // Get user's Steam ID, auth token, and existing expo token
             const { data: user, error } = await this.supabase
                 .from('users')
@@ -158,33 +231,77 @@ class FcmManager {
 
             if (error || !user?.steam_id) {
                 console.error(`[FCM] Could not find Steam ID for user ${userId}`);
+                this.logRegistration(userId, 'ERROR: User Not Found', { error });
                 return;
             }
 
             if (!user.rustplus_auth_token) {
                 console.error(`[FCM] User ${user.steam_id} has no Rust+ auth token. Cannot register with Facepunch.`);
+                this.logRegistration(userId, 'ERROR: No RustPlus Auth Token', { steamId: user.steam_id });
                 return;
             }
+
+            this.logRegistration(userId, '2. User Data Retrieved', {
+                steamId: user.steam_id,
+                hasExpoToken: !!user.expo_push_token,
+                expoTokenPreview: user.expo_push_token?.substring(0, 30) + '...',
+                hasAuthToken: !!user.rustplus_auth_token,
+                authTokenPreview: user.rustplus_auth_token?.substring(0, 20) + '...'
+            });
 
             // Generate stable Device ID for Facepunch (Unique per SteamID to avoid conflicts)
             const UUID_NAMESPACE = '1b671a64-40d5-491e-99b0-da01ff1f3341';
             const facepunchDeviceId = uuidv5(`facepunch-${user.steam_id}`, UUID_NAMESPACE);
             console.log(`[FCM] Generated unique Facepunch DeviceId: ${facepunchDeviceId}`);
 
+            this.logRegistration(userId, '3. Generated Facepunch DeviceId', {
+                deviceId: facepunchDeviceId
+            });
+
             // Check if we already have a valid expo token
             if (user.expo_push_token) {
                 console.log(`[FCM] ✅ Found existing Expo token for user ${user.steam_id}`);
+                console.log(`[FCM] 🗑️  Unregistering existing token first to ensure we become the active device...`);
+
+                // ALWAYS unregister first to ensure this device becomes the "active" one
+                // This prevents issues where other devices (like official mobile app) are registered
+                // NOTE: Not logged to avoid cluttering registration log with reconnection noise
+                try {
+                    const unregisterPayload = {
+                        AuthToken: user.rustplus_auth_token,
+                        PushToken: user.expo_push_token
+                    };
+
+                    await axios.delete(
+                        'https://companion-rust.facepunch.com/api/push/unregister',
+                        {
+                            headers: {
+                                'Authorization': `Bearer ${user.rustplus_auth_token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            data: unregisterPayload
+                        }
+                    );
+
+                    console.log(`[FCM] ✅ Unregistered existing token (${user.expo_push_token.substring(0, 30)}...)`);
+                } catch (unregError) {
+                    // It's OK if unregister fails (token might not exist)
+                    console.log(`[FCM] ⚠️  Unregister returned: ${unregError.response?.status || unregError.message} (this is OK)`);
+                }
+
                 console.log(`[FCM] 🔄 Re-registering Expo token with Facepunch to ensure it's active...`);
 
                 try {
+                    const registerPayload = {
+                        AuthToken: user.rustplus_auth_token,
+                        DeviceId: 'rustplus-web',
+                        PushKind: 3,
+                        PushToken: user.expo_push_token
+                    };
+
                     await axios.post(
                         'https://companion-rust.facepunch.com/api/push/register',
-                        {
-                            AuthToken: user.rustplus_auth_token,
-                            DeviceId: facepunchDeviceId,
-                            PushKind: 0,
-                            PushToken: user.expo_push_token
-                        },
+                        registerPayload,
                         { headers: { 'Content-Type': 'application/json' } }
                     );
 
@@ -203,26 +320,44 @@ class FcmManager {
             const expoDeviceId = uuidv5(user.steam_id, UUID_NAMESPACE);
             console.log(`[FCM] Generated stable Expo deviceId: ${expoDeviceId}`);
 
+            this.logRegistration(userId, '7. Generating New Expo Token', {
+                expoDeviceId,
+                fcmTokenPreview: credentials.fcm.token.substring(0, 30) + '...'
+            });
+
             // Get Expo Push Token from Expo's API
             const expoPushToken = await this.getExpoPushToken(credentials.fcm.token, expoDeviceId);
             console.log(`[FCM] Got Expo Push Token: ${expoPushToken}`);
+
+            this.logRegistration(userId, '8. Expo Token Generated', {
+                expoPushToken
+            });
 
             // Register with Facepunch
             console.log(`[FCM] 🔄 Registering new Expo token with Facepunch...`);
 
             try {
-                await axios.post(
+                const registerPayload = {
+                    AuthToken: user.rustplus_auth_token,
+                    DeviceId: 'rustplus-web',
+                    PushKind: 3,
+                    PushToken: expoPushToken
+                };
+
+                const regResponse = await axios.post(
                     'https://companion-rust.facepunch.com/api/push/register',
-                    {
-                        AuthToken: user.rustplus_auth_token,
-                        DeviceId: facepunchDeviceId,
-                        PushKind: 0,
-                        PushToken: expoPushToken
-                    },
+                    registerPayload,
                     { headers: { 'Content-Type': 'application/json' } }
                 );
 
                 console.log(`[FCM] ✅ Successfully registered new Expo token with Facepunch for ${user.steam_id}`);
+
+                this.logRegistration(userId, '9. Facepunch Registration SUCCESS', {
+                    status: regResponse.status,
+                    statusText: regResponse.statusText,
+                    responseData: regResponse.data,
+                    requestPayload: registerPayload
+                });
 
                 // Save to Supabase only after successful Facepunch registration
                 const { error: updateError } = await this.supabase
@@ -232,12 +367,26 @@ class FcmManager {
 
                 if (updateError) {
                     console.error(`[FCM] Error saving Expo token to DB:`, updateError);
+                    this.logRegistration(userId, '10. Database Save FAILED', {
+                        error: updateError
+                    });
                 } else {
                     console.log(`[FCM] ✅ Saved Expo token to database for user ${user.steam_id}`);
+                    this.logRegistration(userId, '10. Database Save SUCCESS', {
+                        expoPushToken
+                    });
                 }
 
             } catch (regError) {
                 console.error(`[FCM] ❌ Failed to register new Expo token with Facepunch:`, regError.response?.data || regError.message);
+
+                this.logRegistration(userId, '9. Facepunch Registration FAILED', {
+                    status: regError.response?.status,
+                    statusText: regError.response?.statusText,
+                    error: regError.message,
+                    responseData: regError.response?.data
+                });
+
                 throw regError;
             }
 

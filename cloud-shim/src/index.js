@@ -119,9 +119,14 @@ const server = http.createServer(async (req, res) => {
     // Authentication Middleware
     // ========================================
 
-    // Skip auth for health check and preflight requests
-    const isHealthCheck = (req.method === 'GET' && req.url === '/heartbeat') || req.url === '/health';
-    if (req.method !== 'OPTIONS' && !isHealthCheck) {
+    // Skip auth for health check, debug endpoints, and preflight requests
+    const isPublicEndpoint = (req.method === 'GET' && req.url === '/heartbeat') ||
+                             req.url === '/health' ||
+                             req.url === '/debug/listeners' ||
+                             req.url === '/debug/fcm-status' ||
+                             (req.method === 'POST' && req.url === '/debug/test-notification') ||
+                             (req.method === 'DELETE' && req.url.startsWith('/debug/delete-user/'));
+    if (req.method !== 'OPTIONS' && !isPublicEndpoint) {
         const authUser = authenticate(req);
         if (!authUser) {
             console.warn(`[Auth] Unauthorized access attempt: ${req.method} ${req.url}`);
@@ -1180,6 +1185,221 @@ const server = http.createServer(async (req, res) => {
                 error: 'Failed to generate health check'
             }));
         }
+        return;
+    }
+
+    // Diagnostic endpoint - Real-time FCM listener status
+    if (req.method === 'GET' && req.url === '/debug/listeners') {
+        try {
+            const diagnostics = {
+                timestamp: new Date().toISOString(),
+                totalListeners: fcmManager.activeListeners.size,
+                listeners: []
+            };
+
+            // Get all active listeners with detailed info
+            for (const [userId, listener] of fcmManager.activeListeners.entries()) {
+                const { data: user } = await supabase
+                    .from('users')
+                    .select('steam_id, fcm_credentials, expo_push_token, rustplus_auth_token, created_at')
+                    .eq('id', userId)
+                    .single();
+
+                const listenerInfo = {
+                    userId,
+                    steamId: user?.steam_id || 'UNKNOWN',
+                    createdAt: user?.created_at,
+
+                    // FCM Client Status (Receive-Only Connection)
+                    fcmClient: {
+                        exists: !!listener.client,
+                        isConnectedToGoogle: !!listener.client && !listener.client._client?._socket?.destroyed,
+                        hasRecentActivity: listener.lastNotificationReceived && (Date.now() - listener.lastNotificationReceived < 5 * 60 * 1000), // Within 5 minutes
+                        lastNotificationReceived: listener.lastNotificationReceived,
+                        timeSinceLastNotification: listener.lastNotificationReceived ? Date.now() - listener.lastNotificationReceived : null,
+                        notificationHistory: listener.notificationHistory || [],
+                        registrationLog: listener.registrationLog || [],
+                        socketDestroyed: listener.client?._client?._socket?.destroyed || false,
+                        localAddress: listener.client?._client?._socket?.localAddress,
+                        localPort: listener.client?._client?._socket?.localPort,
+                        remoteAddress: listener.client?._client?._socket?.remoteAddress,
+                        remotePort: listener.client?._client?._socket?.remotePort
+                    },
+
+                    // FCM Credentials from DB
+                    credentials: {
+                        hasCredentials: !!user?.fcm_credentials,
+                        androidId: user?.fcm_credentials?.gcm?.androidId || null,
+                        hasFcmToken: !!user?.fcm_credentials?.fcm?.token,
+                        fcmTokenPreview: user?.fcm_credentials?.fcm?.token?.substring(0, 30) + '...' || null
+                    },
+
+                    // Expo Token
+                    expoToken: {
+                        hasToken: !!user?.expo_push_token,
+                        token: user?.expo_push_token || null
+                    },
+
+                    // Auth Status
+                    auth: {
+                        hasRustPlusToken: !!user?.rustplus_auth_token,
+                        tokenPreview: user?.rustplus_auth_token?.substring(0, 30) + '...' || null
+                    },
+
+                    // Discrepancies
+                    discrepancies: []
+                };
+
+                // Check for discrepancies
+                if (!user?.fcm_credentials) {
+                    listenerInfo.discrepancies.push('Missing FCM credentials in database');
+                }
+                if (!user?.expo_push_token) {
+                    listenerInfo.discrepancies.push('Missing Expo token in database');
+                }
+                if (!user?.rustplus_auth_token) {
+                    listenerInfo.discrepancies.push('Missing RustPlus auth token');
+                }
+                if (!listener.client) {
+                    listenerInfo.discrepancies.push('No FCM client exists - cannot receive notifications');
+                }
+                if (listener.client?._client?._socket?.destroyed) {
+                    listenerInfo.discrepancies.push('FCM socket destroyed - reconnection needed');
+                }
+
+                diagnostics.listeners.push(listenerInfo);
+            }
+
+            // Sort: owner (76561197995028213) first, then by steamId
+            diagnostics.listeners.sort((a, b) => {
+                if (a.steamId === '76561197995028213') return -1;
+                if (b.steamId === '76561197995028213') return 1;
+                return (a.steamId || '').localeCompare(b.steamId || '');
+            });
+
+            res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            });
+            res.end(JSON.stringify(diagnostics, null, 2));
+        } catch (err) {
+            console.error('[Diagnostics] Error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+    }
+
+    // Delete user endpoint for end-to-end testing
+    if (req.method === 'DELETE' && req.url.startsWith('/debug/delete-user/')) {
+        const userId = req.url.split('/debug/delete-user/')[1];
+
+        try {
+            console.log(`[Debug] Deleting user ${userId} from database`);
+
+            // Stop FCM listener first
+            if (fcmManager.activeListeners.has(userId)) {
+                await fcmManager.stopListening(userId);
+                console.log(`[Debug] Stopped FCM listener for ${userId}`);
+            }
+
+            // Delete from database (cascades to servers, devices, etc.)
+            const { error } = await supabase
+                .from('users')
+                .delete()
+                .eq('id', userId);
+
+            if (error) {
+                console.error(`[Debug] Failed to delete user:`, error);
+                res.writeHead(500, {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                });
+                res.end(JSON.stringify({ success: false, error: error.message }));
+                return;
+            }
+
+            console.log(`[Debug] ✅ User ${userId} deleted successfully`);
+
+            res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            });
+            res.end(JSON.stringify({
+                success: true,
+                message: 'User deleted. Have them re-login at https://app.rustplus.online'
+            }));
+        } catch (err) {
+            console.error('[Debug] Error deleting user:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+        return;
+    }
+
+    // Test notification endpoint
+    if (req.method === 'POST' && req.url === '/debug/test-notification') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', async () => {
+            try {
+                const { userId } = JSON.parse(body);
+
+                if (!userId) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'userId required' }));
+                    return;
+                }
+
+                // Get user's expo token
+                const { data: user, error } = await supabase
+                    .from('users')
+                    .select('expo_push_token, steam_id')
+                    .eq('id', userId)
+                    .single();
+
+                if (error || !user) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'User not found' }));
+                    return;
+                }
+
+                if (!user.expo_push_token) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'No expo push token found' }));
+                    return;
+                }
+
+                console.log(`[Test] Sending test notification to user ${user.steam_id} (${userId})`);
+
+                // Send test notification via Expo
+                const axios = require('axios');
+                const expoResponse = await axios.post('https://exp.host/--/api/v2/push/send', {
+                    to: user.expo_push_token,
+                    title: 'Cloud Shim Test',
+                    body: `Test notification sent at ${new Date().toLocaleTimeString()}`,
+                    data: { type: 'test', timestamp: Date.now() },
+                    priority: 'high',
+                    channelId: 'default'
+                });
+
+                console.log(`[Test] Expo response:`, expoResponse.data);
+
+                res.writeHead(200, {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                });
+                res.end(JSON.stringify({
+                    success: true,
+                    message: 'Test notification sent',
+                    expoResponse: expoResponse.data
+                }));
+            } catch (err) {
+                console.error('[Test] Error sending test notification:', err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message }));
+            }
+        });
         return;
     }
 

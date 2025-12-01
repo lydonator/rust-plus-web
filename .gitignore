@@ -10,6 +10,8 @@
 !.yarn/releases
 !.yarn/versions
 
+*.md
+
 # testing
 /coverage
 
@@ -52,5 +54,7 @@ node_modules
 CLAUDE.md
 AGENTS.md
 NUL
+
+
 
 /supabase

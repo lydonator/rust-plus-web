@@ -37,6 +37,7 @@ module.exports = {
     },
 
     // Cloud Shim (FCM listener + RustPlus manager)
+    // Production by default - use cloud-shim-dev for development
     {
       name: 'cloud-shim',
       script: 'src/index.js',
@@ -49,11 +50,29 @@ module.exports = {
       out_file: '../logs/cloud-shim-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       env: {
-        NODE_ENV: 'development', // Default to development
+        NODE_ENV: 'production',
+      }
+    },
+
+    // Cloud Shim - Development version (use for WSL dev)
+    {
+      name: 'cloud-shim-dev',
+      script: 'src/index.js',
+      cwd: './cloud-shim',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '512M',
+      error_file: '../logs/cloud-shim-dev-error.log',
+      out_file: '../logs/cloud-shim-dev-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      env: {
+        NODE_ENV: 'development',
       }
     },
 
     // Status Monitor (optional worker)
+    // Production by default - use status-monitor-dev for development
     {
       name: 'status-monitor',
       script: 'status-monitor.js',
@@ -64,6 +83,23 @@ module.exports = {
       max_memory_restart: '256M',
       error_file: '../logs/status-monitor-error.log',
       out_file: '../logs/status-monitor-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      env: {
+        NODE_ENV: 'production'
+      }
+    },
+
+    // Status Monitor - Development version (use for WSL dev)
+    {
+      name: 'status-monitor-dev',
+      script: 'status-monitor.js',
+      cwd: './worker',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '256M',
+      error_file: '../logs/status-monitor-dev-error.log',
+      out_file: '../logs/status-monitor-dev-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       env: {
         NODE_ENV: 'development'

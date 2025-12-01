@@ -51,7 +51,7 @@ async function testFacepunchRegistration(steamId) {
             {
                 AuthToken: user.rustplus_auth_token,
                 DeviceId: 'webapp',
-                PushKind: 0,  // Expo
+                PushKind: 3,  // Expo Push (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)
                 PushToken: user.expo_push_token
             },
             {

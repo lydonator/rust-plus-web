@@ -56,7 +56,7 @@ async function compareUsers(steamId1, steamId2) {
             console.log(`    ✅ Registrations: ${listResponse.data.length}`);
             listResponse.data.forEach((reg, idx) => {
                 console.log(`    [${idx}] DeviceId: ${reg.DeviceId}`);
-                console.log(`        PushKind: ${reg.PushKind} (0=Expo, 1=FCM, 2=APNS)`);
+                console.log(`        PushKind: ${reg.PushKind} (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)`);
                 console.log(`        PushToken: ${reg.PushToken.substring(0, 50)}...`);
                 console.log(`        Matches our token: ${reg.PushToken === user.expo_push_token ? 'YES ✅' : 'NO ❌'}`);
             });

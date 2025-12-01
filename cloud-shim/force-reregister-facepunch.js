@@ -88,7 +88,7 @@ async function forceReregister(userId) {
             const registerPayload = {
                 AuthToken: user.rustplus_auth_token,
                 DeviceId: facepunchDeviceId,
-                PushKind: 0, // FCM/Android
+                PushKind: 3, // Expo Push (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)
                 PushToken: user.expo_push_token
             };
 

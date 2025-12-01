@@ -295,7 +295,7 @@ class FcmManager {
                     const registerPayload = {
                         AuthToken: user.rustplus_auth_token,
                         DeviceId: 'rustplus-web',
-                        PushKind: 3,
+                        PushKind: 3, // Expo Push (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)
                         PushToken: user.expo_push_token
                     };
 
@@ -340,7 +340,7 @@ class FcmManager {
                 const registerPayload = {
                     AuthToken: user.rustplus_auth_token,
                     DeviceId: 'rustplus-web',
-                    PushKind: 3,
+                    PushKind: 3, // Expo Push (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)
                     PushToken: expoPushToken
                 };
 

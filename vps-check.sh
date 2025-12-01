@@ -4,7 +4,7 @@
 # Run this on your VPS to verify production setup
 
 echo "========================================"
-echo "VPS Production Environment Check v2"
+echo "VPS Production Environment Check"
 echo "========================================"
 echo ""
 

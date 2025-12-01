@@ -538,12 +538,23 @@ class FcmManager {
                 };
 
                 if (body.ip && body.port) {
-                    const { data: server } = await this.supabase
+                    // Try to find server by IP:port:playerId first (most accurate)
+                    let serverQuery = this.supabase
                         .from('servers')
                         .select('id')
-                        .eq('ip', body.ip)
-                        .eq('port', body.port.toString())
-                        .single();
+                        .eq('user_id', userId);
+
+                    // If playerId is available, use it for precise matching
+                    if (body.playerId) {
+                        serverQuery = serverQuery.eq('player_id', body.playerId);
+                    } else {
+                        // Fallback: try IP:port match (may fail due to app port vs connection port mismatch)
+                        serverQuery = serverQuery
+                            .eq('ip', body.ip)
+                            .eq('port', body.port.toString());
+                    }
+
+                    const { data: server } = await serverQuery.single();
 
                     if (server) {
                         const { error: deviceError } = await this.supabase
@@ -576,6 +587,8 @@ class FcmManager {
                         }
                     } else {
                         console.error(`[FCM] Could not find server for device pairing: ${body.ip}:${body.port}`);
+                        console.error(`[FCM] Note: This may be due to app port (${body.port}) != connection port`);
+                        console.error(`[FCM] Pair the server in Rust+ app first, then pair devices`);
                     }
                 }
             }

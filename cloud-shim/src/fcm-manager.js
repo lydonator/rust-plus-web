@@ -530,6 +530,8 @@ class FcmManager {
             // Check for Device Pairing (Smart Switch, Alarm, etc.)
             else if (body.entityId && body.entityType) {
                 console.log('[FCM] 🔌 Smart Device Pairing Detected');
+                console.log('[FCM] Full notification body:', JSON.stringify(body, null, 2));
+
                 const deviceData = {
                     entity_id: parseInt(body.entityId),
                     type: parseInt(body.entityType) === 1 ? 'switch' :
@@ -538,23 +540,52 @@ class FcmManager {
                 };
 
                 if (body.ip && body.port) {
+                    console.log('[FCM] Attempting server lookup with:');
+                    console.log('[FCM]   - userId:', userId);
+                    console.log('[FCM]   - body.playerId:', body.playerId || 'NOT PROVIDED');
+                    console.log('[FCM]   - body.ip:', body.ip);
+                    console.log('[FCM]   - body.port:', body.port);
+
                     // Try to find server by IP:port:playerId first (most accurate)
                     let serverQuery = this.supabase
                         .from('servers')
-                        .select('id')
+                        .select('id, ip, port, player_id, name')
                         .eq('user_id', userId);
 
                     // If playerId is available, use it for precise matching
                     if (body.playerId) {
+                        console.log('[FCM] Using playerId matching strategy');
                         serverQuery = serverQuery.eq('player_id', body.playerId);
                     } else {
+                        console.log('[FCM] Using IP:port matching strategy (playerId not available)');
                         // Fallback: try IP:port match (may fail due to app port vs connection port mismatch)
                         serverQuery = serverQuery
                             .eq('ip', body.ip)
                             .eq('port', body.port.toString());
                     }
 
-                    const { data: server } = await serverQuery.single();
+                    const { data: server, error: serverError } = await serverQuery.maybeSingle();
+
+                    if (serverError) {
+                        console.error('[FCM] Database query error:', serverError);
+                    }
+
+                    if (!server) {
+                        // Debug: show what servers ARE available for this user
+                        const { data: allUserServers } = await this.supabase
+                            .from('servers')
+                            .select('id, ip, port, player_id, name')
+                            .eq('user_id', userId);
+
+                        console.log('[FCM] User has', allUserServers?.length || 0, 'server(s) in database:');
+                        if (allUserServers && allUserServers.length > 0) {
+                            allUserServers.forEach(s => {
+                                console.log(`[FCM]   - ${s.name}: ${s.ip}:${s.port} (player_id: ${s.player_id})`);
+                            });
+                        }
+                    } else {
+                        console.log('[FCM] ✅ Found server:', server.name, `(${server.ip}:${server.port})`);
+                    }
 
                     if (server) {
                         const { error: deviceError } = await this.supabase

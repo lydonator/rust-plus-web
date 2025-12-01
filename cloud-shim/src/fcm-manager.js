@@ -552,12 +552,16 @@ class FcmManager {
                         .select('id, ip, port, player_id, name')
                         .eq('user_id', userId);
 
-                    // If playerId is available, use it for precise matching
+                    // Use BOTH playerId AND ip:port for precise matching
+                    // PlayerId alone is insufficient because one user can have multiple servers
                     if (body.playerId) {
-                        console.log('[FCM] Using playerId matching strategy');
-                        serverQuery = serverQuery.eq('player_id', body.playerId);
+                        console.log('[FCM] Using playerId + IP:port matching strategy');
+                        serverQuery = serverQuery
+                            .eq('player_id', body.playerId)
+                            .eq('ip', body.ip)
+                            .eq('port', body.port.toString());
                     } else {
-                        console.log('[FCM] Using IP:port matching strategy (playerId not available)');
+                        console.log('[FCM] Using IP:port matching strategy only (playerId not available)');
                         // Fallback: try IP:port match (may fail due to app port vs connection port mismatch)
                         serverQuery = serverQuery
                             .eq('ip', body.ip)

@@ -1,6 +1,12 @@
 // Load environment variables from .env file in cloud-shim directory (production)
 // or from parent .env.local (development)
-require('dotenv').config({ path: process.env.NODE_ENV === 'production' ? '.env' : '../.env.local' });
+const path = require('path');
+const dotenvPath = process.env.NODE_ENV === 'production'
+    ? path.join(__dirname, '..', '.env')  // cloud-shim/.env
+    : path.join(__dirname, '..', '..', '.env.local');  // ../.env.local
+
+require('dotenv').config({ path: dotenvPath });
+console.log(`[Config] Loading environment from: ${dotenvPath}`);
 
 
 module.exports = {

@@ -3,6 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 const AndroidFCM = require('@liamcottle/push-receiver/src/android/fcm');
 const PushReceiverClient = require('@liamcottle/push-receiver/src/client');
 const axios = require('axios');
+const crypto = require('crypto');
 const config = require('./config');
 
 // Constants from config (Rust+ companion app public constants)
@@ -30,6 +31,14 @@ class FcmManager {
                 this.processedNotifications.delete(id);
             }
         }
+    }
+
+    /**
+     * Hash an FCM token to detect when credentials change
+     * We don't store the full token (privacy), just a hash for comparison
+     */
+    hashFcmToken(fcmToken) {
+        return crypto.createHash('sha256').update(fcmToken).digest('hex');
     }
 
     async getOrRegisterCredentials(userId) {
@@ -222,10 +231,10 @@ class FcmManager {
                 fcmToken: credentials?.fcm?.token?.substring(0, 30) + '...'
             });
 
-            // Get user's Steam ID, auth token, and existing expo token
+            // Get user's Steam ID, auth token, existing expo token, and FCM hash
             const { data: user, error } = await this.supabase
                 .from('users')
-                .select('steam_id, expo_push_token, rustplus_auth_token')
+                .select('steam_id, expo_push_token, rustplus_auth_token, fcm_credentials_hash')
                 .eq('id', userId)
                 .maybeSingle();
 
@@ -261,56 +270,70 @@ class FcmManager {
             // Check if we already have a valid expo token
             if (user.expo_push_token) {
                 console.log(`[FCM] ✅ Found existing Expo token for user ${user.steam_id}`);
-                console.log(`[FCM] 🗑️  Unregistering existing token first to ensure we become the active device...`);
 
-                // ALWAYS unregister first to ensure this device becomes the "active" one
-                // This prevents issues where other devices (like official mobile app) are registered
-                // NOTE: Not logged to avoid cluttering registration log with reconnection noise
-                try {
-                    const unregisterPayload = {
-                        AuthToken: user.rustplus_auth_token,
-                        PushToken: user.expo_push_token
-                    };
+                // CRITICAL: Verify the Expo token is linked to the current FCM credentials
+                // Expo tokens are bound to the FCM token used to create them. If FCM credentials
+                // changed (new androidId/FCM token), the old Expo token won't route notifications correctly.
+                // We detect this by checking if we also have stored fcm_credentials_hash.
+                const currentFcmTokenHash = this.hashFcmToken(credentials.fcm.token);
+                const storedFcmTokenHash = user.fcm_credentials_hash;
 
-                    await axios.delete(
-                        'https://companion-rust.facepunch.com/api/push/unregister',
-                        {
-                            headers: {
-                                'Authorization': `Bearer ${user.rustplus_auth_token}`,
-                                'Content-Type': 'application/json'
-                            },
-                            data: unregisterPayload
-                        }
-                    );
-
-                    console.log(`[FCM] ✅ Unregistered existing token (${user.expo_push_token.substring(0, 30)}...)`);
-                } catch (unregError) {
-                    // It's OK if unregister fails (token might not exist)
-                    console.log(`[FCM] ⚠️  Unregister returned: ${unregError.response?.status || unregError.message} (this is OK)`);
-                }
-
-                console.log(`[FCM] 🔄 Re-registering Expo token with Facepunch to ensure it's active...`);
-
-                try {
-                    const registerPayload = {
-                        AuthToken: user.rustplus_auth_token,
-                        DeviceId: 'rustplus-web',
-                        PushKind: 3, // Expo Push (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)
-                        PushToken: user.expo_push_token
-                    };
-
-                    await axios.post(
-                        'https://companion-rust.facepunch.com/api/push/register',
-                        registerPayload,
-                        { headers: { 'Content-Type': 'application/json' } }
-                    );
-
-                    console.log(`[FCM] ✅ Successfully registered Expo token with Facepunch for ${user.steam_id}`);
-                    return;
-                } catch (regError) {
-                    console.error(`[FCM] ❌ Failed to re-register with Facepunch:`, regError.response?.data || regError.message);
-                    console.log(`[FCM] Will attempt to generate new Expo token...`);
+                if (storedFcmTokenHash && storedFcmTokenHash !== currentFcmTokenHash) {
+                    console.log(`[FCM] ⚠️  FCM credentials changed! Old hash: ${storedFcmTokenHash.substring(0, 10)}... New hash: ${currentFcmTokenHash.substring(0, 10)}...`);
+                    console.log(`[FCM] 🔄 Expo token is stale (linked to old FCM credentials). Generating new token...`);
                     // Fall through to generate new token
+                } else {
+                    console.log(`[FCM] 🗑️  Unregistering existing token first to ensure we become the active device...`);
+
+                    // ALWAYS unregister first to ensure this device becomes the "active" one
+                    // This prevents issues where other devices (like official mobile app) are registered
+                    // NOTE: Not logged to avoid cluttering registration log with reconnection noise
+                    try {
+                        const unregisterPayload = {
+                            AuthToken: user.rustplus_auth_token,
+                            PushToken: user.expo_push_token
+                        };
+
+                        await axios.delete(
+                            'https://companion-rust.facepunch.com/api/push/unregister',
+                            {
+                                headers: {
+                                    'Authorization': `Bearer ${user.rustplus_auth_token}`,
+                                    'Content-Type': 'application/json'
+                                },
+                                data: unregisterPayload
+                            }
+                        );
+
+                        console.log(`[FCM] ✅ Unregistered existing token (${user.expo_push_token.substring(0, 30)}...)`);
+                    } catch (unregError) {
+                        // It's OK if unregister fails (token might not exist)
+                        console.log(`[FCM] ⚠️  Unregister returned: ${unregError.response?.status || unregError.message} (this is OK)`);
+                    }
+
+                    console.log(`[FCM] 🔄 Re-registering Expo token with Facepunch to ensure it's active...`);
+
+                    try {
+                        const registerPayload = {
+                            AuthToken: user.rustplus_auth_token,
+                            DeviceId: 'rustplus-web',
+                            PushKind: 3, // Expo Push (0=FCM, 1=iOS FCM, 2=APNS, 3=Expo)
+                            PushToken: user.expo_push_token
+                        };
+
+                        await axios.post(
+                            'https://companion-rust.facepunch.com/api/push/register',
+                            registerPayload,
+                            { headers: { 'Content-Type': 'application/json' } }
+                        );
+
+                        console.log(`[FCM] ✅ Successfully registered Expo token with Facepunch for ${user.steam_id}`);
+                        return;
+                    } catch (regError) {
+                        console.error(`[FCM] ❌ Failed to re-register with Facepunch:`, regError.response?.data || regError.message);
+                        console.log(`[FCM] Will attempt to generate new Expo token...`);
+                        // Fall through to generate new token
+                    }
                 }
             }
 
@@ -360,9 +383,14 @@ class FcmManager {
                 });
 
                 // Save to Supabase only after successful Facepunch registration
+                // Also save hash of FCM token to detect when credentials change
+                const fcmTokenHash = this.hashFcmToken(credentials.fcm.token);
                 const { error: updateError } = await this.supabase
                     .from('users')
-                    .update({ expo_push_token: expoPushToken })
+                    .update({
+                        expo_push_token: expoPushToken,
+                        fcm_credentials_hash: fcmTokenHash
+                    })
                     .eq('id', userId);
 
                 if (updateError) {

@@ -10,6 +10,7 @@ import ChatOverlay from '@/components/ChatOverlay';
 import MapSidebar from '@/components/MapSidebar';
 import { clusterMarkers, getClusterRadius, type MarkerCluster } from '@/lib/markerClustering';
 import { useMapData } from '@/hooks/useMapData';
+import { useMarketData } from '@/hooks/useMarketData';
 
 interface Monument {
     token: string;
@@ -118,6 +119,53 @@ export default function MapPage() {
         return clusterMarkers(vendingMarkers, clusterRadius);
     }, [markers, serverInfo]);
 
+    /**
+     * Get vendor deal quality based on market intelligence
+     * Returns the best deal quality across all items this vendor sells
+     */
+    const getVendorDealQuality = (vendor: MapMarker): {
+        dealQuality: 'excellent' | 'good' | 'average' | 'none';
+        bestSavings: number;
+        dealItems: number;
+    } => {
+        if (!marketData || !vendor.sellOrders) {
+            return { dealQuality: 'none', bestSavings: 0, dealItems: 0 };
+        }
+
+        let bestDealQuality: 'excellent' | 'good' | 'average' | 'none' = 'none';
+        let bestSavings = 0;
+        let dealItems = 0;
+
+        for (const order of vendor.sellOrders) {
+            if (order.amountInStock === 0) continue;
+
+            const itemKey = String(order.itemId);
+            const rankedVendors = marketData.rankedVendors[itemKey];
+
+            if (!rankedVendors) continue;
+
+            const vendorData = rankedVendors.find(v => v.vendorId === vendor.id);
+
+            if (!vendorData) continue;
+
+            // Track best deal quality
+            if (vendorData.dealQuality === 'excellent' && bestDealQuality !== 'excellent') {
+                bestDealQuality = 'excellent';
+                bestSavings = Math.max(bestSavings, vendorData.savings);
+                dealItems++;
+            } else if (vendorData.dealQuality === 'good' && bestDealQuality === 'none') {
+                bestDealQuality = 'good';
+                bestSavings = Math.max(bestSavings, vendorData.savings);
+                dealItems++;
+            } else if (vendorData.dealQuality === 'average' && bestDealQuality === 'none') {
+                bestDealQuality = 'average';
+                bestSavings = Math.max(bestSavings, vendorData.savings);
+            }
+        }
+
+        return { dealQuality: bestDealQuality, bestSavings, dealItems };
+    };
+
     const handleMarkerEnter = (index: number) => {
         if (hoverTimeoutRef.current) {
             clearTimeout(hoverTimeoutRef.current);
@@ -194,6 +242,17 @@ export default function MapPage() {
     } = useMapData({
         serverId,
         sendCommand,
+        enabled: !!userId
+    });
+
+    // Use market intelligence hook (handles IndexedDB caching + SSE updates)
+    const {
+        marketData,
+        loading: marketLoading,
+        error: marketError,
+        cacheHit
+    } = useMarketData({
+        serverId,
         enabled: !!userId
     });
 
@@ -779,6 +838,32 @@ export default function MapPage() {
                 .bounce-vendor {
                     animation: gentle-bounce 2s ease-in-out infinite;
                 }
+                @keyframes gold-pulse {
+                    0%, 100% {
+                        opacity: 0.8;
+                        transform: scale(1);
+                    }
+                    50% {
+                        opacity: 1;
+                        transform: scale(1.1);
+                    }
+                }
+                @keyframes cyan-pulse {
+                    0%, 100% {
+                        opacity: 0.6;
+                        transform: scale(1);
+                    }
+                    50% {
+                        opacity: 0.9;
+                        transform: scale(1.05);
+                    }
+                }
+                .excellent-deal {
+                    animation: gold-pulse 1.5s ease-in-out infinite, gentle-bounce 2s ease-in-out infinite;
+                }
+                .good-deal {
+                    animation: cyan-pulse 2s ease-in-out infinite;
+                }
             `}</style>
             <div className="flex items-center justify-between mb-4">
                 <div>
@@ -1060,24 +1145,78 @@ export default function MapPage() {
                                     const dynamicScale = Math.max(0.6, 2.0 / scale); // More visible when zoomed out
                                     const baseRadius = Math.max(8, 12 * dynamicScale);
 
-                                    // Check if any marker in cluster is highlighted
+                                    // Check if any marker in cluster is highlighted (legacy shopping list)
                                     const isHighlighted = cluster.markers.some(m => highlightedVendors.includes(m.id));
                                     const isHovered = hoveredClusterId === cluster.id;
+
+                                    // Get best deal quality across all vendors in cluster
+                                    let clusterDealQuality: 'excellent' | 'good' | 'average' | 'none' = 'none';
+                                    let clusterBestSavings = 0;
+                                    let clusterDealItems = 0;
+
+                                    for (const marker of cluster.markers) {
+                                        const { dealQuality, bestSavings, dealItems } = getVendorDealQuality(marker);
+
+                                        if (dealQuality === 'excellent') {
+                                            clusterDealQuality = 'excellent';
+                                            clusterBestSavings = Math.max(clusterBestSavings, bestSavings);
+                                            clusterDealItems += dealItems;
+                                        } else if (dealQuality === 'good' && clusterDealQuality !== 'excellent') {
+                                            clusterDealQuality = 'good';
+                                            clusterBestSavings = Math.max(clusterBestSavings, bestSavings);
+                                            clusterDealItems += dealItems;
+                                        } else if (dealQuality === 'average' && clusterDealQuality === 'none') {
+                                            clusterDealQuality = 'average';
+                                            clusterBestSavings = Math.max(clusterBestSavings, bestSavings);
+                                        }
+                                    }
+
+                                    // Get ring colors based on deal quality
+                                    let ringColor = '#10b981'; // Default green
+                                    let ringClass = '';
+                                    let badgeText = '';
+                                    let badgeColor = '';
+
+                                    if (clusterDealQuality === 'excellent') {
+                                        ringColor = '#fbbf24'; // Gold
+                                        ringClass = 'excellent-deal';
+                                        badgeText = '🔥 HOT DEAL';
+                                        badgeColor = 'bg-gradient-to-r from-yellow-400 to-orange-500 text-black';
+                                    } else if (clusterDealQuality === 'good') {
+                                        ringColor = '#06b6d4'; // Cyan
+                                        ringClass = 'good-deal';
+                                        badgeText = '💰 Good Price';
+                                        badgeColor = 'bg-gradient-to-r from-cyan-400 to-blue-500 text-white';
+                                    } else if (clusterDealQuality === 'average') {
+                                        ringColor = '#10b981'; // Green (no animation)
+                                    }
 
                                     return (
                                         <g
                                             key={cluster.id}
-                                            className={`group ${isHighlighted ? 'bounce-vendor' : ''}`}
+                                            className={`group ${isHighlighted ? 'bounce-vendor' : ''} ${ringClass}`}
                                             style={{ pointerEvents: 'auto', cursor: 'pointer' }}
                                             onMouseEnter={() => handleClusterEnter(cluster.id)}
                                             onMouseLeave={handleMarkerLeave}
                                             onClick={() => cluster.count > 1 ? setClickedClusterId(cluster.id) : null}
                                         >
                                             {cluster.count > 1 ? (
-                                                // Cluster icon (bright green ring with white text on black background)
+                                                // Cluster icon with deal quality highlighting
                                                 <>
-                                                    {/* Pulsing ring for highlighted clusters */}
-                                                    {isHighlighted && (
+                                                    {/* Pulsing ring for deal quality */}
+                                                    {clusterDealQuality !== 'none' && clusterDealQuality !== 'average' && (
+                                                        <circle
+                                                            cx={pos.x}
+                                                            cy={pos.y}
+                                                            r={baseRadius * 1.8}
+                                                            fill="none"
+                                                            stroke={ringColor}
+                                                            strokeWidth={Math.max(2, 3 / scale)}
+                                                            className={clusterDealQuality === 'excellent' ? 'animate-pulse opacity-80' : 'opacity-60'}
+                                                        />
+                                                    )}
+                                                    {/* Legacy shopping list highlight (yellow pulse) */}
+                                                    {isHighlighted && clusterDealQuality === 'none' && (
                                                         <circle
                                                             cx={pos.x}
                                                             cy={pos.y}
@@ -1088,13 +1227,13 @@ export default function MapPage() {
                                                             className="animate-pulse opacity-80"
                                                         />
                                                     )}
-                                                    {/* Bright green ring */}
+                                                    {/* Main ring with deal quality color */}
                                                     <circle
                                                         cx={pos.x}
                                                         cy={pos.y}
                                                         r={baseRadius}
                                                         fill="none"
-                                                        stroke="#10b981"
+                                                        stroke={ringColor}
                                                         strokeWidth={Math.max(2, 3 / scale)}
                                                         className="drop-shadow-lg"
                                                     />
@@ -1121,9 +1260,22 @@ export default function MapPage() {
                                                     </text>
                                                 </>
                                             ) : (
-                                                // Single vendor - show shopping cart icon
+                                                // Single vendor - show shopping cart icon with deal quality
                                                 <>
-                                                    {isHighlighted && (
+                                                    {/* Pulsing ring for deal quality */}
+                                                    {clusterDealQuality !== 'none' && clusterDealQuality !== 'average' && (
+                                                        <circle
+                                                            cx={pos.x}
+                                                            cy={pos.y}
+                                                            r={baseRadius * 1.5}
+                                                            fill="none"
+                                                            stroke={ringColor}
+                                                            strokeWidth={Math.max(2, 3 / scale)}
+                                                            className={clusterDealQuality === 'excellent' ? 'animate-pulse opacity-80' : 'opacity-60'}
+                                                        />
+                                                    )}
+                                                    {/* Legacy shopping list highlight */}
+                                                    {isHighlighted && clusterDealQuality === 'none' && (
                                                         <circle
                                                             cx={pos.x}
                                                             cy={pos.y}
@@ -1138,7 +1290,7 @@ export default function MapPage() {
                                                         cx={pos.x}
                                                         cy={pos.y}
                                                         r={baseRadius * 0.9}
-                                                        fill={isHighlighted ? '#06b6d4' : '#10b981'}
+                                                        fill={ringColor}
                                                         stroke="black"
                                                         strokeWidth={Math.max(1.5, 2 / scale)}
                                                         className="drop-shadow-lg"
@@ -1157,71 +1309,111 @@ export default function MapPage() {
                                                     </g>
                                                 </>
                                             )}
-                                            {/* Hover tooltip */}
+                                            {/* Hover tooltip for clusters */}
                                             {isHovered && cluster.count > 1 && (
                                                 <foreignObject
                                                     x={pos.x + 15}
-                                                    y={pos.y - 20}
-                                                    width="200"
-                                                    height="50"
+                                                    y={pos.y - 30}
+                                                    width="250"
+                                                    height="80"
                                                     className="overflow-visible pointer-events-none"
                                                 >
-                                                    <div className="bg-yellow-400 text-black px-3 py-1.5 rounded text-sm font-bold shadow-lg whitespace-nowrap">
-                                                        Multiple Vending Machines
-                                                    </div>
-                                                </foreignObject>
-                                            )}
-                                            {/* Single vendor hover - show items */}
-                                            {isHovered && cluster.count === 1 && (
-                                                <foreignObject
-                                                    x={pos.x + 10}
-                                                    y={pos.y - 80}
-                                                    width="300"
-                                                    height="400"
-                                                    className="overflow-visible pointer-events-none"
-                                                >
-                                                    <div className="bg-neutral-900/95 text-white p-3 rounded-lg text-xs border border-neutral-600 shadow-2xl max-h-96 overflow-y-auto">
-                                                        <div className="font-bold mb-2 pb-2 border-b border-neutral-600 text-sm text-green-400">
-                                                            {cluster.markers[0].name || 'A Shop'}
+                                                    <div className="bg-neutral-900/95 border border-neutral-600 text-white px-3 py-2 rounded-lg text-sm shadow-2xl">
+                                                        <div className="font-bold mb-1">
+                                                            {cluster.count} Vending Machines
                                                         </div>
-                                                        {cluster.markers[0].sellOrders?.slice(0, 5).map((order: any, i: number) => {
-                                                            const sellingItem = getItemInfo(order.itemId);
-                                                            const costItem = getItemInfo(order.currencyId);
-                                                            return (
-                                                                <div key={i} className="mb-2 pb-2 border-b border-neutral-700 last:border-0">
-                                                                    <div className="flex items-center gap-2 mb-1">
-                                                                        {sellingItem?.iconUrl && (
-                                                                            <img src={sellingItem.iconUrl} alt="" className="w-8 h-8" />
-                                                                        )}
-                                                                        <div className="flex-1">
-                                                                            <div className="text-[10px] text-neutral-400 uppercase">Selling</div>
-                                                                            <div className="text-green-400 font-semibold">
-                                                                                {order.quantity}x {sellingItem?.name || `Item #${order.itemId}`}
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="flex items-center gap-2 mb-1">
-                                                                        {costItem?.iconUrl && (
-                                                                            <img src={costItem.iconUrl} alt="" className="w-8 h-8" />
-                                                                        )}
-                                                                        <div className="flex-1">
-                                                                            <div className="text-[10px] text-neutral-400 uppercase">Cost</div>
-                                                                            <div className="text-yellow-400 font-semibold">
-                                                                                {order.costPerItem}x {costItem?.name || `Item #${order.currencyId}`}
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                    {order.amountInStock !== undefined && (
-                                                                        <div className="text-[10px] text-blue-400">
-                                                                            Stock: {order.amountInStock}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            );
-                                                        })}
+                                                        {clusterDealQuality !== 'none' && (
+                                                            <div className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${badgeColor}`}>
+                                                                {badgeText} ({Math.round(clusterBestSavings)}% off)
+                                                            </div>
+                                                        )}
+                                                        {clusterDealItems > 0 && (
+                                                            <div className="text-xs text-neutral-400 mt-1">
+                                                                {clusterDealItems} hot deals inside
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </foreignObject>
                                             )}
+                                            {/* Single vendor hover - show items with deal quality */}
+                                            {isHovered && cluster.count === 1 && (() => {
+                                                const vendor = cluster.markers[0];
+                                                const { dealQuality: vendorDealQuality, bestSavings: vendorBestSavings } = getVendorDealQuality(vendor);
+
+                                                return (
+                                                    <foreignObject
+                                                        x={pos.x + 10}
+                                                        y={pos.y - 80}
+                                                        width="320"
+                                                        height="420"
+                                                        className="overflow-visible pointer-events-none"
+                                                    >
+                                                        <div className="bg-neutral-900/95 text-white p-3 rounded-lg text-xs border border-neutral-600 shadow-2xl max-h-96 overflow-y-auto">
+                                                            <div className="mb-2 pb-2 border-b border-neutral-600">
+                                                                <div className="font-bold text-sm text-green-400 mb-1">
+                                                                    {vendor.name || 'A Shop'}
+                                                                </div>
+                                                                {vendorDealQuality !== 'none' && (
+                                                                    <div className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeColor}`}>
+                                                                        {badgeText} ({Math.round(vendorBestSavings)}% off)
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            {vendor.sellOrders?.slice(0, 5).map((order: any, i: number) => {
+                                                                const sellingItem = getItemInfo(order.itemId);
+                                                                const costItem = getItemInfo(order.currencyId);
+
+                                                                // Get deal quality for this specific item
+                                                                const itemKey = String(order.itemId);
+                                                                const rankedVendors = marketData?.rankedVendors[itemKey];
+                                                                const vendorData = rankedVendors?.find(v => v.vendorId === vendor.id);
+                                                                const itemDealQuality = vendorData?.dealQuality || 'none';
+                                                                const itemSavings = vendorData?.savings || 0;
+
+                                                                let itemBadge = null;
+                                                                if (itemDealQuality === 'excellent') {
+                                                                    itemBadge = <span className="text-[9px] bg-gradient-to-r from-yellow-400 to-orange-500 text-black px-1.5 py-0.5 rounded-full font-bold">🔥 {Math.round(itemSavings)}% OFF</span>;
+                                                                } else if (itemDealQuality === 'good') {
+                                                                    itemBadge = <span className="text-[9px] bg-gradient-to-r from-cyan-400 to-blue-500 text-white px-1.5 py-0.5 rounded-full font-bold">💰 {Math.round(itemSavings)}% OFF</span>;
+                                                                }
+
+                                                                return (
+                                                                    <div key={i} className="mb-2 pb-2 border-b border-neutral-700 last:border-0">
+                                                                        <div className="flex items-center gap-2 mb-1">
+                                                                            {sellingItem?.iconUrl && (
+                                                                                <img src={sellingItem.iconUrl} alt="" className="w-8 h-8" />
+                                                                            )}
+                                                                            <div className="flex-1">
+                                                                                <div className="text-[10px] text-neutral-400 uppercase">Selling</div>
+                                                                                <div className="text-green-400 font-semibold">
+                                                                                    {order.quantity}x {sellingItem?.name || `Item #${order.itemId}`}
+                                                                                </div>
+                                                                                {itemBadge && <div className="mt-0.5">{itemBadge}</div>}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-2 mb-1">
+                                                                            {costItem?.iconUrl && (
+                                                                                <img src={costItem.iconUrl} alt="" className="w-8 h-8" />
+                                                                            )}
+                                                                            <div className="flex-1">
+                                                                                <div className="text-[10px] text-neutral-400 uppercase">Cost</div>
+                                                                                <div className="text-yellow-400 font-semibold">
+                                                                                    {order.costPerItem}x {costItem?.name || `Item #${order.currencyId}`}
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                        {order.amountInStock !== undefined && (
+                                                                            <div className="text-[10px] text-blue-400">
+                                                                                Stock: {order.amountInStock}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </foreignObject>
+                                                );
+                                            })()}
                                         </g>
                                     );
                                 })}

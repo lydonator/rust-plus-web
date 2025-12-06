@@ -2,6 +2,9 @@ const logger = require('./logger');
 const rustPlusManager = require('./rustplus-manager');
 const stateManager = require('./state-manager');
 const supabase = require('./supabase');
+const marketProcessor = require('./market-processor');
+const historicalAggregator = require('./historical-aggregator');
+const priceAlertMonitor = require('./price-alert-monitor');
 
 /**
  * Job Processors for BullMQ
@@ -200,6 +203,65 @@ async function processTeamInfoJob(job) {
 }
 
 /**
+ * Process market aggregation job
+ * Aggregates buffered market observations into historical database tables
+ * Runs every 6 hours
+ */
+async function processMarketAggregationJob(job) {
+    try {
+        logger.info('JobProcessor', 'Running market aggregation');
+
+        // Run aggregation with market processor instance
+        await historicalAggregator.runAggregation(marketProcessor);
+
+        const stats = historicalAggregator.getStats();
+        logger.info('JobProcessor', 'Market aggregation complete', {
+            lastRunTime: stats.lastRunTime,
+            lastRunAgo: stats.lastRunAgo ? `${(stats.lastRunAgo / 1000 / 60).toFixed(1)}m ago` : 'never'
+        });
+
+        return {
+            success: true,
+            stats
+        };
+    } catch (error) {
+        logger.error('JobProcessor', 'Market aggregation failed', { error: error.message });
+        throw error;
+    }
+}
+
+/**
+ * Process price alert check job
+ * Checks active price alerts and sends notifications when prices hit targets
+ * Runs every 5 minutes
+ */
+async function processPriceAlertJob(job) {
+    try {
+        logger.info('JobProcessor', 'Running price alert check');
+
+        // Run price alert check with market processor instance
+        await priceAlertMonitor.checkPriceAlerts(marketProcessor);
+
+        // Cleanup old cooldowns to prevent memory leaks
+        priceAlertMonitor.cleanupCooldowns();
+
+        const stats = priceAlertMonitor.getStats();
+        logger.info('JobProcessor', 'Price alert check complete', {
+            lastRunTime: stats.lastRunTime,
+            activeCooldowns: stats.activeCooldowns
+        });
+
+        return {
+            success: true,
+            stats
+        };
+    } catch (error) {
+        logger.error('JobProcessor', 'Price alert check failed', { error: error.message });
+        throw error;
+    }
+}
+
+/**
  * Process inactivity check job
  * Checks all users for inactivity and disconnects inactive servers
  * Runs every 5 minutes
@@ -323,6 +385,12 @@ async function processJob(job) {
         case 'inactivity-check':
             return await processInactivityCheckJob(job);
 
+        case 'market-aggregation':
+            return await processMarketAggregationJob(job);
+
+        case 'price-alert-check':
+            return await processPriceAlertJob(job);
+
         default:
             logger.warn('JobProcessor', `Unknown job type: ${job.name}`);
             return { success: false, error: 'Unknown job type' };
@@ -334,5 +402,7 @@ module.exports = {
     processServerInfoJob,
     processMapDataJob,
     processTeamInfoJob,
-    processInactivityCheckJob
+    processInactivityCheckJob,
+    processMarketAggregationJob,
+    processPriceAlertJob
 };

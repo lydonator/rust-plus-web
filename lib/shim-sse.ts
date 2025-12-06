@@ -40,6 +40,8 @@ class ShimSSEManager {
         countdown_cancelled: this.handleAhsoka.bind(this),
         disconnected_by_inactivity: this.handleKyloRen.bind(this),
         shopping_list_match: this.handleGrogu.bind(this),
+        shopping_deal_alert: this.handleMandoArmorer.bind(this),
+        market_update: this.handleBabyYoda.bind(this),
         error: this.handleJabba.bind(this),
     };
 
@@ -206,6 +208,28 @@ class ShimSSEManager {
         window.dispatchEvent(new CustomEvent('shopping_list_match', { detail: data }));
     }
 
+    private handleMandoArmorer(event: any) {
+        const data = JSON.parse(event.data);
+        console.log('[ShimSSE] 🎯 Shopping Deal Alert:', {
+            item: data.item?.item_name,
+            vendor: data.vendor?.vendorName,
+            savings: data.savings + '%',
+            dealQuality: data.dealQuality
+        });
+        window.dispatchEvent(new CustomEvent('shopping_deal_alert', { detail: data }));
+    }
+
+    private handleBabyYoda(event: any) {
+        const data = JSON.parse(event.data);
+        // Verbose logging disabled for market updates (too frequent)
+        // console.log('[ShimSSE] 📊 Market Update:', {
+        //     serverId: data.serverId,
+        //     uniqueItems: Object.keys(data.data?.itemPrices || {}).length,
+        //     topDeals: data.data?.topDeals?.length || 0
+        // });
+        window.dispatchEvent(new CustomEvent('market_update', { detail: data }));
+    }
+
     private handleJabba(event: any) {
         // Only try to parse if there's actual data
         if (event.data) {
@@ -247,6 +271,8 @@ class ShimSSEManager {
         this.eventSource.addEventListener('countdown_cancelled', this.handlers.countdown_cancelled);
         this.eventSource.addEventListener('disconnected_by_inactivity', this.handlers.disconnected_by_inactivity);
         this.eventSource.addEventListener('shopping_list_match', this.handlers.shopping_list_match);
+        this.eventSource.addEventListener('shopping_deal_alert', this.handlers.shopping_deal_alert);
+        this.eventSource.addEventListener('market_update', this.handlers.market_update);
         this.eventSource.addEventListener('error', this.handlers.error);
     }
 
@@ -278,6 +304,8 @@ class ShimSSEManager {
         this.eventSource.removeEventListener('countdown_cancelled', this.handlers.countdown_cancelled);
         this.eventSource.removeEventListener('disconnected_by_inactivity', this.handlers.disconnected_by_inactivity);
         this.eventSource.removeEventListener('shopping_list_match', this.handlers.shopping_list_match);
+        this.eventSource.removeEventListener('shopping_deal_alert', this.handlers.shopping_deal_alert);
+        this.eventSource.removeEventListener('market_update', this.handlers.market_update);
         this.eventSource.removeEventListener('error', this.handlers.error);
     }
 
@@ -388,8 +416,15 @@ class ShimSSEManager {
 
         // Handle connection errors with retry logic
         this.eventSource.onerror = (error) => {
-            console.error('[ShimSSE] ❌ Connection error', error);
-            console.log('[ShimSSE] EventSource readyState:', this.eventSource?.readyState);
+            const readyState = this.eventSource?.readyState;
+
+            // Only log actual errors, not normal reconnection cycles (readyState 2 = CLOSED)
+            // EventSource automatically reconnects, so CLOSED state is expected during reconnect
+            if (readyState !== 2) {
+                console.error('[ShimSSE] ❌ Connection error', error);
+                console.log('[ShimSSE] EventSource readyState:', readyState);
+            }
+            // Suppress normal reconnection logs entirely (caused by HMR in dev mode)
 
             // Clear connecting timeout
             if (this.connectingTimeout) {

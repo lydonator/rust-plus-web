@@ -1,5 +1,6 @@
 const RustPlus = require('@liamcottle/rustplus.js');
 const supabase = require('./supabase');
+const marketProcessor = require('./market-processor');
 
 class RustPlusManager {
     constructor() {
@@ -672,7 +673,7 @@ class RustPlusManager {
                     const failureKey = `getinfo_failure_${serverId}`;
                     const lastLogTime = this.lastFailureLogTime?.get(failureKey) || 0;
                     const now = Date.now();
-                    
+
                     // Only log detailed failure info every 30 seconds max
                     if ((now - lastLogTime) > 30000) {
                         console.warn('[RustPlus] ═══ GETINFO FAILURE ═══');
@@ -691,7 +692,7 @@ class RustPlusManager {
                         }
 
                         console.warn('[RustPlus] ═════════════════════');
-                        
+
                         // Track when we last logged this failure
                         if (!this.lastFailureLogTime) this.lastFailureLogTime = new Map();
                         this.lastFailureLogTime.set(failureKey, now);
@@ -832,13 +833,13 @@ class RustPlusManager {
                 if (message && message.response && message.response.mapMarkers) {
                     const allMarkers = message.response.mapMarkers.markers || [];
                     console.log(`[RustPlus] Dynamic fetch: ${allMarkers.length} total markers`);
-                    
+
                     // Debug: Log marker types to understand what we're getting
                     const markerTypes = [...new Set(allMarkers.map(m => m.type))];
                     if (markerTypes.length > 0) {
                         console.log(`[RustPlus] Available marker types:`, markerTypes);
                     }
-                    
+
                     const dynamicMarkers = allMarkers.filter(m =>
                         m.type === 1 || m.type === 'Player' ||           // Player
                         m.type === 4 || m.type === 'CH47' || m.type === 'Chinook' ||  // Chinook
@@ -869,7 +870,7 @@ class RustPlusManager {
             this.getMapMarkers(serverId, (message) => {
                 if (message && message.response && message.response.mapMarkers) {
                     const allMarkers = message.response.mapMarkers.markers || [];
-                    
+
                     const playerMarkers = allMarkers.filter(m =>
                         m.type === 1 || m.type === 'Player'           // Players only
                     );
@@ -896,7 +897,7 @@ class RustPlusManager {
             this.getMapMarkers(serverId, (message) => {
                 if (message && message.response && message.response.mapMarkers) {
                     const allMarkers = message.response.mapMarkers.markers || [];
-                    
+
                     const eventMarkers = allMarkers.filter(m =>
                         m.type === 4 || m.type === 'CH47' || m.type === 'Chinook' ||  // Chinook
                         m.type === 5 || m.type === 'CargoShip' ||        // Cargo Ship  
@@ -915,7 +916,7 @@ class RustPlusManager {
     }
 
     // Fetch STATIC map markers (vending machines, explosions) - infrequent updates
-    fetchAndEmitStaticMarkers(serverId, rustPlusInstance) {
+    async fetchAndEmitStaticMarkers(serverId, rustPlusInstance) {
         const rustPlus = rustPlusInstance || this.activeConnections.get(serverId);
         if (!rustPlus) return;
 
@@ -923,11 +924,11 @@ class RustPlusManager {
         if (ws && ws.readyState !== 1) return;
 
         try {
-            this.getMapMarkers(serverId, (message) => {
+            this.getMapMarkers(serverId, async (message) => {
                 if (message && message.response && message.response.mapMarkers) {
                     const allMarkers = message.response.mapMarkers.markers || [];
                     console.log(`[RustPlus] Static fetch: ${allMarkers.length} total markers`);
-                    
+
                     const staticMarkers = allMarkers.filter(m =>
                         m.type === 2 || m.type === 'Explosion' ||        // Explosion
                         m.type === 3 || m.type === 'VendingMachine' ||   // Vending Machine
@@ -936,7 +937,12 @@ class RustPlusManager {
                     );
                     console.log(`[RustPlus] Filtered ${staticMarkers.length} static markers`);
                     this.emitToSSE(serverId, 'static_markers_update', { markers: staticMarkers });
-                    this.checkShoppingList(serverId, staticMarkers);
+
+                    // NEW: Process market data with intelligent analysis
+                    await this.processAndEmitMarketData(serverId, allMarkers);
+
+                    // OLD: Basic shopping list matching (will be replaced)
+                    // this.checkShoppingList(serverId, staticMarkers);
                 } else {
                     console.warn(`[RustPlus] Static markers: No valid response from server ${serverId}`);
                 }
@@ -1099,6 +1105,162 @@ class RustPlusManager {
         }
     }
 
+    // ====================================================================================
+    // NEW: Market Intelligence Processing
+    // ====================================================================================
+
+    /**
+     * Process market data with intelligence engine and emit processed results
+     */
+    async processAndEmitMarketData(serverId, markers) {
+        try {
+            // Get server info from database (contains wipeTime)
+            const { data: serverInfoData, error: serverInfoError } = await supabase
+                .from('server_info')
+                .select('*')
+                .eq('server_id', serverId)
+                .single();
+
+            if (serverInfoError) {
+                console.warn(`[Market] Could not fetch server info for ${serverId}:`, serverInfoError.message);
+            }
+
+            const serverInfo = serverInfoData || {};
+
+            // Process markers through intelligence engine
+            const processedMarketData = await marketProcessor.processMarkers(
+                serverId,
+                markers,
+                serverInfo
+            );
+
+            console.log(`[Market] 📊 Emitting market_update for ${serverId}:`, {
+                vendors: processedMarketData.vendorCount,
+                uniqueItems: Object.keys(processedMarketData.itemPrices).length,
+                topDeals: processedMarketData.topDeals.length,
+                wipeStage: processedMarketData.wipeStage
+            });
+
+            // Emit processed market data via SSE
+            this.emitToSSE(serverId, 'market_update', {
+                serverId,
+                data: processedMarketData,
+                timestamp: Date.now()
+            });
+
+            // Enhanced shopping list matching with intelligence
+            await this.checkShoppingListWithIntelligence(serverId, processedMarketData);
+
+        } catch (error) {
+            console.error(`[Market] Error processing market data for ${serverId}:`, error.message);
+            console.error(`[Market] Stack trace:`, error.stack);
+        }
+    }
+
+    /**
+     * Enhanced shopping list matching with price intelligence
+     * Only alerts for top 3 cheapest vendors with 20%+ savings
+     */
+    async checkShoppingListWithIntelligence(serverId, processedMarketData) {
+        try {
+            // Get user_id for this server
+            const { data: server, error: serverError } = await supabase
+                .from('servers')
+                .select('user_id')
+                .eq('id', serverId)
+                .single();
+
+            if (serverError || !server) {
+                return;
+            }
+
+            // Get shopping list items for this server
+            const { data: shoppingList, error: listError } = await supabase
+                .from('shopping_lists')
+                .select('*')
+                .eq('server_id', serverId);
+
+            if (listError || !shoppingList || shoppingList.length === 0) {
+                // If shopping list is empty, clear all alerts for this server
+                if (this.shoppingListAlerts.has(serverId)) {
+                    console.log(`[Shopping] 🗑️ Shopping list empty, clearing all alerts for server`);
+                    this.shoppingListAlerts.delete(serverId);
+                }
+                return;
+            }
+
+            // Clean up alerts for items no longer in the shopping list
+            if (this.shoppingListAlerts.has(serverId)) {
+                const alertedItems = this.shoppingListAlerts.get(serverId);
+                const currentItemIds = new Set(shoppingList.map(item => item.item_id));
+
+                // Remove alerts for items that were removed from the shopping list
+                for (const itemId of alertedItems) {
+                    if (!currentItemIds.has(itemId)) {
+                        alertedItems.delete(itemId);
+                        console.log(`[Shopping] 🗑️ Cleared alert for item ${itemId} (removed from shopping list)`);
+                    }
+                }
+            }
+
+            // Check each shopping list item
+            for (const listItem of shoppingList) {
+                const itemKey = String(listItem.item_id);
+                const rankedVendors = processedMarketData.rankedVendors[itemKey];
+
+                if (!rankedVendors || rankedVendors.length === 0) {
+                    continue; // Item not available
+                }
+
+                // NEW: Only alert for GOOD DEALS (top 3 cheapest vendors with 20%+ savings)
+                const topVendors = rankedVendors.slice(0, 3);
+                const cheapestVendor = topVendors[0];
+
+                // Only send alert if:
+                // 1. First time seeing this item, OR
+                // 2. Price is significantly better (20%+ savings vs average)
+                const shouldAlert = !this.shoppingListAlerts.has(serverId) ||
+                    !this.shoppingListAlerts.get(serverId).has(listItem.item_id) ||
+                    cheapestVendor.savings >= 20;
+
+                if (shouldAlert && cheapestVendor.savings >= 20) {
+                    console.log(`[Shopping] 🎯 DEAL ALERT: ${listItem.item_name} at ${cheapestVendor.vendorName}`);
+                    console.log(`[Shopping] 💰 Price: ${Math.round(cheapestVendor.price)} (${Math.round(cheapestVendor.savings)}% below average)`);
+
+                    // Track that we've alerted for this item
+                    if (!this.shoppingListAlerts.has(serverId)) {
+                        this.shoppingListAlerts.set(serverId, new Set());
+                    }
+                    this.shoppingListAlerts.get(serverId).add(listItem.item_id);
+
+                    // Emit intelligent shopping deal alert
+                    this.emitToSSE(serverId, 'shopping_deal_alert', {
+                        item: listItem,
+                        vendor: cheapestVendor,
+                        allVendors: topVendors,
+                        dealQuality: cheapestVendor.dealQuality, // 'excellent' or 'good'
+                        savings: Math.round(cheapestVendor.savings),
+                        avgPrice: Math.round(processedMarketData.itemPrices[itemKey].avg)
+                    });
+
+                    // Also check for price alerts (if target_price is set)
+                    if (listItem.alert_enabled && listItem.target_price) {
+                        if (cheapestVendor.price <= listItem.target_price) {
+                            console.log(`[Shopping] 🔔 PRICE ALERT: ${listItem.item_name} hit target price!`);
+                            // TODO: Send FCM notification (Phase 7)
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`[Shopping] Error in intelligent shopping list matching for ${serverId}:`, error.message);
+        }
+    }
+
+    // ====================================================================================
+    // End Market Intelligence Processing
+    // ====================================================================================
+
     // Fetch team info and emit SSE event
     fetchAndEmitTeamInfo(serverId, rustPlusInstance) {
         const rustPlus = rustPlusInstance || this.activeConnections.get(serverId);
@@ -1230,9 +1392,6 @@ class RustPlusManager {
             { pattern: '*/30 * * * * *' } // Every 30 seconds
         );
 
-        // NOTE: Dynamic and static markers polling is now started only when users visit the Map page
-        // This is handled by startMapPolling() method to save resources
-
         await this.queueManager.scheduleRepeatingJob(
             'rustplus',
             `team-info-${serverId}`,
@@ -1240,10 +1399,20 @@ class RustPlusManager {
             { pattern: '*/10 * * * * *' } // Every 10 seconds
         );
 
+        // ALWAYS poll static markers (vending machines) for market intelligence
+        // This ensures market data is fresh even if user hasn't visited Map page
+        await this.queueManager.scheduleRepeatingJob(
+            'rustplus',
+            `static-markers-${serverId}`,
+            { serverId },
+            { pattern: '*/30 * * * * *' } // Every 30 seconds
+        );
+
         console.log(`[RustPlus] ✅ Scheduled BullMQ jobs for server ${serverId}:`)
         console.log(`[RustPlus]   - Server info: every 30 seconds`)
         console.log(`[RustPlus]   - Team info: every 10 seconds`)
-        console.log(`[RustPlus]   - Map polling: on-demand only`);
+        console.log(`[RustPlus]   - Static markers (vending machines): every 30 seconds`)
+        console.log(`[RustPlus]   - Dynamic map polling (players/events): on-demand only`);
     }
 
     // Start map-specific polling (called when user opens map page)
@@ -1253,7 +1422,7 @@ class RustPlusManager {
             return;
         }
 
-        console.log(`[RustPlus] 🗺️ Starting map polling for ${serverId}`);
+        console.log(`[RustPlus] 🗺️ Starting dynamic map polling for ${serverId}`);
 
         // Start player markers polling (slower updates) - every 10 seconds
         await this.queueManager.scheduleRepeatingJob(
@@ -1263,7 +1432,7 @@ class RustPlusManager {
             { pattern: '*/10 * * * * *' }
         );
 
-        // Start event markers polling (real-time events like Cargo, Heli) - every 5 seconds (reduced from 2s to reduce load)
+        // Start event markers polling (real-time events like Cargo, Heli) - every 5 seconds
         await this.queueManager.scheduleRepeatingJob(
             'rustplus',
             `event-markers-${serverId}`,
@@ -1271,15 +1440,10 @@ class RustPlusManager {
             { pattern: '*/5 * * * * *' }
         );
 
-        // Start static markers polling (vending machines) - every 30 seconds
-        await this.queueManager.scheduleRepeatingJob(
-            'rustplus',
-            `static-markers-${serverId}`,
-            { serverId },
-            { pattern: '*/30 * * * * *' }
-        );
+        // NOTE: Static markers (vending machines) are already polling via setPollingIntervals()
+        // No need to start them here - they run continuously for market intelligence
 
-        console.log(`[RustPlus] ✅ Map polling started for ${serverId}`);
+        console.log(`[RustPlus] ✅ Dynamic map polling started for ${serverId} (players + events)`);
     }
 
     // Stop map-specific polling (called when user leaves map page)
@@ -1289,13 +1453,14 @@ class RustPlusManager {
             return;
         }
 
-        console.log(`[RustPlus] 🛑 Stopping map polling for ${serverId}`);
+        console.log(`[RustPlus] 🛑 Stopping dynamic map polling for ${serverId}`);
 
         await this.queueManager.removeRepeatingJob('rustplus', `player-markers-${serverId}`);
         await this.queueManager.removeRepeatingJob('rustplus', `event-markers-${serverId}`);
-        await this.queueManager.removeRepeatingJob('rustplus', `static-markers-${serverId}`);
 
-        console.log(`[RustPlus] ✅ Map polling stopped for ${serverId}`);
+        // NOTE: Static markers (vending) continue polling for market intelligence
+
+        console.log(`[RustPlus] ✅ Dynamic map polling stopped for ${serverId} (static markers continue)`);
     }
 
     /**
@@ -1330,7 +1495,7 @@ class RustPlusManager {
                 if (match) {
                     const serverId = match[2];
                     const hasActiveConnection = this.activeConnections.has(serverId);
-                    
+
                     if (!validServerIds.has(serverId)) {
                         console.log(`[RustPlus] 🗑️ Removing orphaned job: ${job.name} (server ${serverId} not found in DB)`);
                         await queue.removeRepeatableByKey(job.key);

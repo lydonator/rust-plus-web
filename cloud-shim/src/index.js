@@ -10,6 +10,8 @@ const queueManager = require('./queue-manager');
 const { processJob } = require('./job-processors');
 const { authenticate } = require('./middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+const marketProcessor = require('./market-processor');
+const historicalAggregator = require('./historical-aggregator');
 
 // ========================================
 // Security: Input Validation
@@ -1568,7 +1570,17 @@ server.listen(PORT, async () => {
             pattern: '*/5 * * * *' // Cron: every 5 minutes
         });
 
-        logger.info('Shim', 'Job workers and schedulers initialized');
+        // Schedule historical aggregation job (every 6 hours)
+        await queueManager.scheduleRepeatingJob('rustplus', 'market-aggregation', {}, {
+            pattern: '0 */6 * * *' // Cron: every 6 hours on the hour (00:00, 06:00, 12:00, 18:00)
+        });
+
+        // Schedule price alert check job (every 5 minutes)
+        await queueManager.scheduleRepeatingJob('rustplus', 'price-alert-check', {}, {
+            pattern: '*/5 * * * *' // Cron: every 5 minutes
+        });
+
+        logger.info('Shim', 'Job workers and schedulers initialized (inactivity check + market aggregation + price alerts)');
     } catch (error) {
         logger.error('Shim', 'Failed to initialize queue manager', { error: error.message });
     }

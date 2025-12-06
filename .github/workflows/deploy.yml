@@ -38,6 +38,11 @@ jobs:
             # Navigate to project directory
             cd ${{ secrets.VPS_PATH }}
 
+            # Save current commit as rollback point
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            echo "$CURRENT_COMMIT" > .last-good-deploy
+            echo "📌 Saved rollback point: $CURRENT_COMMIT"
+
             # Pull latest code
             echo "Pulling latest code from GitHub..."
             git fetch origin
@@ -94,7 +99,14 @@ jobs:
         if: failure()
         run: |
           echo "❌ Deployment failed! Check GitHub Actions logs for details."
-          echo "To rollback manually, SSH to VPS and run:"
-          echo "  cd /home/web/apps/rust-plus-web"
-          echo "  git reset --hard <previous-commit>"
-          echo "  npm run build && pm2 restart all"
+          echo ""
+          echo "🔄 To rollback to the last good deploy, SSH to VPS and run:"
+          echo "  cd ${{ secrets.VPS_PATH }}"
+          echo "  git reset --hard \$(cat .last-good-deploy)"
+          echo "  npm ci --production"
+          echo "  npm run build"
+          echo "  cd cloud-shim && npm ci --production && cd .."
+          echo "  pm2 restart all"
+          echo ""
+          echo "💡 Or use the rollback script:"
+          echo "  cd ${{ secrets.VPS_PATH }} && ./scripts/rollback.sh"

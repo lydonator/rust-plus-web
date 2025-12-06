@@ -50,11 +50,32 @@ cloud-shim/.env.production
 next-env.d.ts
 node_modules
 
+# deployment tracking (VPS only)
+.last-good-deploy
+
 /.claude
 CLAUDE.md
 AGENTS.md
 NUL
 
+# PM2 logs (contain sensitive runtime data)
+/logs/
+*.log
 
+# Debug files and output
+*debug*.json
+*debug*.txt
+market-debug-output.txt
+cloud-shim/map-debug.json
 
+# Test and debug scripts (may contain credentials)
+cloud-shim/src/debug-*.js
+cloud-shim/src/test-*.js
+
+# Local scripts (may contain sensitive data)
+/scripts/
+
+# Supabase local files
 /supabase
+.temp/
+supabase/.temp/
